@@ -7,17 +7,20 @@ using Foundatio.Extensions;
 using Foundatio.Logging;
 using Foundatio.Serializer;
 using Foundatio.Utility;
-using Microsoft.ServiceBus;
-using Microsoft.ServiceBus.Messaging;
+using Microsoft.Azure.ServiceBus;
+using Microsoft.Azure.ServiceBus.Primitives;
+using Microsoft.Azure.Management.ServiceBus;
+using Microsoft.Azure.Management.ServiceBus.Models;
+using Microsoft.Rest;
 using Nito.AsyncEx;
 
 namespace Foundatio.Messaging {
     public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBusOptions> {
         private readonly AsyncLock _lock = new AsyncLock();
-        private readonly NamespaceManager _namespaceManager;
         private TopicClient _topicClient;
         private SubscriptionClient _subscriptionClient;
         private readonly string _subscriptionName;
+        private readonly ServiceBusManagementClient _sbManagementClient;
 
         [Obsolete("Use the options overload")]
         public AzureServiceBusMessageBus(string connectionString, string topicName, ISerializer serializer = null, ILoggerFactory loggerFactory = null) : this(new AzureServiceBusMessageBusOptions { ConnectionString = connectionString, Topic = topicName, SubscriptionName = "MessageBus", Serializer = serializer, LoggerFactory = loggerFactory }) { }
@@ -26,8 +29,9 @@ namespace Foundatio.Messaging {
             if (String.IsNullOrEmpty(options.ConnectionString))
                 throw new ArgumentException("ConnectionString is required.");
 
-            _namespaceManager = NamespaceManager.CreateFromConnectionString(options.ConnectionString);
             _subscriptionName = _options.SubscriptionName ?? MessageBusId;
+            var creds = new TokenCredentials(_options.Token);
+            _sbManagementClient = new ServiceBusManagementClient(creds) { SubscriptionId = _options.SubscriptionId };
         }
 
         protected override async Task EnsureTopicSubscriptionAsync(CancellationToken cancellationToken) {
@@ -42,33 +46,40 @@ namespace Foundatio.Messaging {
 
                 var sw = Stopwatch.StartNew();
                 try {
-                    await _namespaceManager.CreateSubscriptionAsync(CreateSubscriptionDescription()).AnyContext();
-                } catch (MessagingEntityAlreadyExistsException) { }
+                    await _sbManagementClient.Subscriptions.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName,
+                        _options.Topic, _options.SubscriptionName, CreateSubscriptionDescription()).AnyContext();
+                }
+                catch (ErrorResponseException) { }
 
                 // Look into message factory with multiple recievers so more than one connection is made and managed....
-                _subscriptionClient = SubscriptionClient.CreateFromConnectionString(_options.ConnectionString, _options.Topic, _subscriptionName, ReceiveMode.ReceiveAndDelete);
-                _subscriptionClient.OnMessageAsync(OnMessageAsync, new OnMessageOptions { /* AutoComplete = true, // Don't run with recieve and delete */ MaxConcurrentCalls = 6 /* calculate this based on the the thread count. */ });
-                if (_options.SubscriptionRetryPolicy != null)
-                    _subscriptionClient.RetryPolicy = _options.SubscriptionRetryPolicy;
+                _subscriptionClient = new SubscriptionClient(_options.ConnectionString, _options.Topic, _options.SubscriptionName, ReceiveMode.ReceiveAndDelete, _options.SubscriptionRetryPolicy);
+                // Enable prefetch to speeden up the receive rate.
                 if (_options.PrefetchCount.HasValue)
                     _subscriptionClient.PrefetchCount = _options.PrefetchCount.Value;
 
+                _subscriptionClient.RegisterMessageHandler(OnMessageAsync, new MessageHandlerOptions(OnExceptionAsync) { MaxConcurrentCalls = 6 });
                 sw.Stop();
                 _logger.Trace("Ensure topic subscription exists took {0}ms.", sw.ElapsedMilliseconds);
             }
         }
 
-        private async Task OnMessageAsync(BrokeredMessage brokeredMessage) {
+        private async Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
+            _logger.Warn(args.Exception, "OnExceptionAsync({0}) Error in the message pump {1}. Trying again..", args.Exception.Message);
+            return ;
+        }
+
+        private async Task OnMessageAsync(Message  brokeredMessage, CancellationToken cancellationToken) {
             if (_subscribers.IsEmpty)
                 return;
 
-            _logger.Trace("OnMessageAsync({messageId})", brokeredMessage.MessageId);
+            _logger.Trace($"Received message: messageId:{ brokeredMessage.MessageId} SequenceNumber:{brokeredMessage.SystemProperties.SequenceNumber}");
             MessageBusData message;
             try {
-                message = await _serializer.DeserializeAsync<MessageBusData>(brokeredMessage.GetBody<Stream>()).AnyContext();
+                message = await _serializer.DeserializeAsync<MessageBusData>(brokeredMessage.Body).AnyContext();
             } catch (Exception ex) {
                 _logger.Warn(ex, "OnMessageAsync({0}) Error deserializing messsage: {1}", brokeredMessage.MessageId, ex.Message);
-                await brokeredMessage.DeadLetterAsync("Deserialization error", ex.Message).AnyContext();
+                // A lock token can be found in LockToken, only when ReceiveMode is set to PeekLock
+                await _subscriptionClient.DeadLetterAsync(brokeredMessage.SystemProperties.LockToken).AnyContext();
                 return;
             }
 
@@ -85,22 +96,23 @@ namespace Foundatio.Messaging {
 
                 var sw = Stopwatch.StartNew();
                 try {
-                    await _namespaceManager.CreateTopicAsync(CreateTopicDescription()).AnyContext();
-                } catch (MessagingEntityAlreadyExistsException) { }
+                    await _sbManagementClient.Topics.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Topic, CreateTopicDescription()).AnyContext();
+                } catch (ErrorResponseException) { }
 
-                _topicClient = TopicClient.CreateFromConnectionString(_options.ConnectionString, _options.Topic);
+                _topicClient = new TopicClient(_options.ConnectionString, _options.Topic);
                 sw.Stop();
                 _logger.Trace("Ensure topic exists took {0}ms.", sw.ElapsedMilliseconds);
             }
         }
 
         protected override async Task PublishImplAsync(Type messageType, object message, TimeSpan? delay, CancellationToken cancellationToken) {
-            var data = await _serializer.SerializeToStreamAsync(new MessageBusData {
+            var data = await _serializer.SerializeAsync(new MessageBusData {
                 Type = messageType.AssemblyQualifiedName,
                 Data = await _serializer.SerializeToStringAsync(message).AnyContext()
             }).AnyContext();
 
-            var brokeredMessage = new BrokeredMessage(data, true);
+            
+            var brokeredMessage = new Message(data);
 
             if (delay.HasValue && delay.Value > TimeSpan.Zero) {
                 _logger.Trace("Schedule delayed message: {messageType} ({delay}ms)", messageType.FullName, delay.Value.TotalMilliseconds);
@@ -112,8 +124,8 @@ namespace Foundatio.Messaging {
             await _topicClient.SendAsync(brokeredMessage).AnyContext();
         }
 
-        private TopicDescription CreateTopicDescription() {
-            var td = new TopicDescription(_options.Topic);
+        private SBTopic CreateTopicDescription() {
+            var td = new SBTopic(_options.Topic);
 
             if (_options.TopicAutoDeleteOnIdle.HasValue)
                 td.AutoDeleteOnIdle = _options.TopicAutoDeleteOnIdle.Value;
@@ -122,7 +134,7 @@ namespace Foundatio.Messaging {
                 td.DefaultMessageTimeToLive = _options.TopicDefaultMessageTimeToLive.Value;
 
             if (_options.TopicMaxSizeInMegabytes.HasValue)
-                td.MaxSizeInMegabytes = _options.TopicMaxSizeInMegabytes.Value;
+                td.MaxSizeInMegabytes = Convert.ToInt32(_options.TopicMaxSizeInMegabytes.Value);
 
             if (_options.TopicRequiresDuplicateDetection.HasValue)
                 td.RequiresDuplicateDetection = _options.TopicRequiresDuplicateDetection.Value;
@@ -133,11 +145,11 @@ namespace Foundatio.Messaging {
             if (_options.TopicEnableBatchedOperations.HasValue)
                 td.EnableBatchedOperations = _options.TopicEnableBatchedOperations.Value;
 
-            if (_options.TopicEnableFilteringMessagesBeforePublishing.HasValue)
-                td.EnableFilteringMessagesBeforePublishing = _options.TopicEnableFilteringMessagesBeforePublishing.Value;
+            //if (_options.TopicEnableFilteringMessagesBeforePublishing.HasValue)
+            //    td.EnableFilteringMessagesBeforePublishing = _options.TopicEnableFilteringMessagesBeforePublishing.Value;
 
-            if (_options.TopicIsAnonymousAccessible.HasValue)
-                td.IsAnonymousAccessible = _options.TopicIsAnonymousAccessible.Value;
+            //if (_options.TopicIsAnonymousAccessible.HasValue)
+            //    td.IsAnonymousAccessible = _options.TopicIsAnonymousAccessible.Value;
 
             if (_options.TopicStatus.HasValue)
                 td.Status = _options.TopicStatus.Value;
@@ -151,14 +163,14 @@ namespace Foundatio.Messaging {
             if (_options.TopicEnableExpress.HasValue)
                 td.EnableExpress = _options.TopicEnableExpress.Value;
 
-            if (!String.IsNullOrEmpty(_options.TopicUserMetadata))
-                td.UserMetadata = _options.TopicUserMetadata;
+            //if (!String.IsNullOrEmpty(_options.TopicUserMetadata))
+            //    td.UserMetadata = _options.TopicUserMetadata;
 
             return td;
         }
 
-        private SubscriptionDescription CreateSubscriptionDescription() {
-            var sd = new SubscriptionDescription(_options.Topic, _subscriptionName);
+        private SBSubscription CreateSubscriptionDescription() {
+            var sd = new SBSubscription(_options.Topic, _subscriptionName);
 
             if (_options.SubscriptionAutoDeleteOnIdle.HasValue)
                 sd.AutoDeleteOnIdle = _options.SubscriptionAutoDeleteOnIdle.Value;
@@ -173,10 +185,10 @@ namespace Foundatio.Messaging {
                 sd.RequiresSession = _options.SubscriptionRequiresSession.Value;
 
             if (_options.SubscriptionEnableDeadLetteringOnMessageExpiration.HasValue)
-                sd.EnableDeadLetteringOnMessageExpiration = _options.SubscriptionEnableDeadLetteringOnMessageExpiration.Value;
+                sd.DeadLetteringOnMessageExpiration = _options.SubscriptionEnableDeadLetteringOnMessageExpiration.Value;
 
-            if (_options.SubscriptionEnableDeadLetteringOnFilterEvaluationExceptions.HasValue)
-                sd.EnableDeadLetteringOnFilterEvaluationExceptions = _options.SubscriptionEnableDeadLetteringOnFilterEvaluationExceptions.Value;
+            //if (_options.SubscriptionEnableDeadLetteringOnFilterEvaluationExceptions.HasValue)
+            //    sd.EnableDeadLetteringOnFilterEvaluationExceptions = _options.SubscriptionEnableDeadLetteringOnFilterEvaluationExceptions.Value;
 
             if (_options.SubscriptionMaxDeliveryCount.HasValue)
                 sd.MaxDeliveryCount = _options.SubscriptionMaxDeliveryCount.Value;
@@ -187,14 +199,14 @@ namespace Foundatio.Messaging {
             if (_options.SubscriptionStatus.HasValue)
                 sd.Status = _options.SubscriptionStatus.Value;
 
-            if (!String.IsNullOrEmpty(_options.SubscriptionForwardTo))
-                sd.ForwardTo = _options.SubscriptionForwardTo;
+            //if (!String.IsNullOrEmpty(_options.SubscriptionForwardTo))
+            //    sd.ForwardTo = _options.SubscriptionForwardTo;
 
-            if (!String.IsNullOrEmpty(_options.SubscriptionForwardDeadLetteredMessagesTo))
-                sd.ForwardDeadLetteredMessagesTo = _options.SubscriptionForwardDeadLetteredMessagesTo;
+            //if (!String.IsNullOrEmpty(_options.SubscriptionForwardDeadLetteredMessagesTo))
+            //    sd.ForwardDeadLetteredMessagesTo = _options.SubscriptionForwardDeadLetteredMessagesTo;
 
-            if (!String.IsNullOrEmpty(_options.SubscriptionUserMetadata))
-                sd.UserMetadata = _options.SubscriptionUserMetadata;
+            //if (!String.IsNullOrEmpty(_options.SubscriptionUserMetadata))
+            //    sd.UserMetadata = _options.SubscriptionUserMetadata;
 
             return sd;
         }
@@ -205,28 +217,28 @@ namespace Foundatio.Messaging {
             CloseSubscriptionClient();
         }
 
-        private void CloseTopicClient() {
+        private async Task CloseTopicClient() {
             if (_topicClient == null)
                 return;
 
-            using (_lock.Lock()) {
+            using (await _lock.LockAsync().AnyContext()) {
                 if (_topicClient == null)
                     return;
 
-                _topicClient?.Close();
+                await _topicClient?.CloseAsync();
                 _topicClient = null;
             }
         }
 
-        private void CloseSubscriptionClient() {
+        private async Task CloseSubscriptionClient() {
             if (_subscriptionClient == null)
                 return;
 
-            using (_lock.Lock()) {
+            using (await _lock.LockAsync().AnyContext()) {
                 if (_subscriptionClient == null)
                     return;
 
-                _subscriptionClient?.Close();
+                await _subscriptionClient?.CloseAsync();
                 _subscriptionClient = null;
             }
         }

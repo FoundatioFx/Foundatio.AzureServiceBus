@@ -5,7 +5,7 @@ using Foundatio.Tests.Utility;
 using Xunit;
 using System.Threading.Tasks;
 using Foundatio.Logging;
-using Microsoft.ServiceBus;
+using Microsoft.Azure.ServiceBus;
 using Xunit.Abstractions;
 
 namespace Foundatio.AzureServiceBus.Tests.Queue {
@@ -16,32 +16,33 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
             Log.SetLogLevel<AzureServiceBusQueue<SimpleWorkItem>>(LogLevel.Trace);
         }
 
-        protected override IQueue<SimpleWorkItem> GetQueue(int retries = 1, TimeSpan? workItemTimeout = null, TimeSpan? retryDelay = null, int deadLetterMaxItems = 100, bool runQueueMaintenance = true) {
-            string connectionString = Configuration.GetConnectionString("AzureServiceBusConnectionString");
-            if (String.IsNullOrEmpty(connectionString))
-                return null;
+        //protected override IQueue<SimpleWorkItem> GetQueue(int retries = 1, TimeSpan? workItemTimeout = null, TimeSpan? retryDelay = null, int deadLetterMaxItems = 100, bool runQueueMaintenance = true) {
+        //    string connectionString = Configuration.GetConnectionString("AzureServiceBusConnectionString");
+        //    if (String.IsNullOrEmpty(connectionString))
+        //        return null;
 
-            var retryPolicy = retryDelay.GetValueOrDefault() > TimeSpan.Zero
-                ? new RetryExponential(retryDelay.GetValueOrDefault(), retryDelay.GetValueOrDefault() + retryDelay.GetValueOrDefault(), retries + 1)
-                : RetryPolicy.NoRetry;
+        //    var retryPolicy = retryDelay.GetValueOrDefault() > TimeSpan.Zero
+        //        ? new RetryExponential(retryDelay.GetValueOrDefault(),
+        //        retryDelay.GetValueOrDefault() + retryDelay.GetValueOrDefault(), retries + 1)
+        //        : RetryPolicy.NoRetry;
 
-            _logger.Debug("Queue Id: {queueId}", _queueName);
-            return new AzureServiceBusQueue<SimpleWorkItem>(new AzureServiceBusQueueOptions<SimpleWorkItem> {
-                ConnectionString = connectionString,
-                Name = _queueName,
-                AutoDeleteOnIdle = TimeSpan.FromMinutes(5),
-                EnableBatchedOperations = true,
-                EnableExpress = true,
-                EnablePartitioning = true,
-                SupportOrdering = false,
-                RequiresDuplicateDetection = false,
-                RequiresSession = false,
-                Retries = retries,
-                RetryPolicy = retryPolicy,
-                WorkItemTimeout = workItemTimeout.GetValueOrDefault(TimeSpan.FromMinutes(5)),
-                LoggerFactory = Log
-            });
-        }
+        //    _logger.Debug("Queue Id: {queueId}", _queueName);
+        //    return new AzureServiceBusQueue<SimpleWorkItem>(new AzureServiceBusQueueOptions<SimpleWorkItem> {
+        //        ConnectionString = connectionString,
+        //        Name = _queueName,
+        //        AutoDeleteOnIdle = TimeSpan.FromMinutes(5),
+        //        EnableBatchedOperations = true,
+        //        EnableExpress = true,
+        //        EnablePartitioning = true,
+        //        SupportOrdering = false,
+        //        RequiresDuplicateDetection = false,
+        //        RequiresSession = false,
+        //        Retries = retries,
+        //        RetryPolicy = retryPolicy,
+        //        WorkItemTimeout = workItemTimeout.GetValueOrDefault(TimeSpan.FromMinutes(5)),
+        //        LoggerFactory = Log
+        //    });
+        //}
 
         protected override Task CleanupQueueAsync(IQueue<SimpleWorkItem> queue) {
             // Don't delete the queue, it's super expensive and will be cleaned up later.

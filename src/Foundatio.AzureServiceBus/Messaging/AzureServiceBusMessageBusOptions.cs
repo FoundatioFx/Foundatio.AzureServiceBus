@@ -1,9 +1,18 @@
 ﻿using System;
-using Microsoft.ServiceBus;
-using Microsoft.ServiceBus.Messaging;
+using Microsoft.Azure.ServiceBus;
+using Microsoft.Azure.Management.ServiceBus.Models;
 
 namespace Foundatio.Messaging {
     public class AzureServiceBusMessageBusOptions : MessageBusOptionsBase {
+
+        public string Token { get; set; }
+
+        public string SubscriptionId { get; set; }
+
+        public string ResourceGroupName { get; set; }
+
+        public string NameSpaceName { get; set; }
+
         public string ConnectionString { get; set; }
 
         /// <summary>
