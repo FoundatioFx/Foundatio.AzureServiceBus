@@ -47,6 +47,12 @@ namespace Foundatio.Queues {
             if (String.IsNullOrEmpty(options.ConnectionString))
                 throw new ArgumentException("ConnectionString is required.");
 
+            if (String.IsNullOrEmpty(options.Token))
+                throw new ArgumentException("Token is required.");
+
+            if (String.IsNullOrEmpty(options.SubscriptionId))
+                throw new ArgumentException("SubscriptionId is required.");
+
             if (options.Name.Length > 260)
                 throw new ArgumentException("Queue name must be set and be less than 260 characters.");
 
@@ -59,6 +65,7 @@ namespace Foundatio.Queues {
             if (options.DuplicateDetectionHistoryTimeWindow.HasValue && (options.DuplicateDetectionHistoryTimeWindow < TimeSpan.FromSeconds(20.0) || options.DuplicateDetectionHistoryTimeWindow > TimeSpan.FromDays(7.0)))
                 throw new ArgumentException("The minimum DuplicateDetectionHistoryTimeWindow duration is 20 seconds and maximum is 7 days.");
 
+            // todo: usermetadata not found in the new lib
             if (options.UserMetadata != null && options.UserMetadata.Length > 260)
                 throw new ArgumentException("Queue UserMetadata must be less than 1024 characters.");
 
@@ -78,7 +85,7 @@ namespace Foundatio.Queues {
                 var sw = Stopwatch.StartNew();
                 try {
                     await _sbManagementClient.Queues.CreateOrUpdateAsync (_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription()).AnyContext();
-                } catch (MessagingEntityNotFoundException) { }
+                } catch (ErrorResponseException) { }
 
                 _queueClient = new QueueClient(_options.ConnectionString, _options.Name, ReceiveMode.PeekLock, _options.RetryPolicy);
                 sw.Stop();
@@ -87,7 +94,10 @@ namespace Foundatio.Queues {
         }
 
         public override async Task DeleteQueueAsync() {
-            await _sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
+            var getQueueResponse = await _sbManagementClient.Queues.GetAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
+            // todo: test if this condition is necessary and delete can be called without condition
+            if (getQueueResponse.Status == EntityStatus.Active)
+                await _sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
 
             _queueClient = null;
             _enqueuedCount = 0;

@@ -29,6 +29,12 @@ namespace Foundatio.Messaging {
             if (String.IsNullOrEmpty(options.ConnectionString))
                 throw new ArgumentException("ConnectionString is required.");
 
+            if (String.IsNullOrEmpty(options.Token))
+                throw new ArgumentException("Token is required.");
+
+            if (String.IsNullOrEmpty(options.SubscriptionId))
+                throw new ArgumentException("SubscriptionId is required.");
+
             _subscriptionName = _options.SubscriptionName ?? MessageBusId;
             var creds = new TokenCredentials(_options.Token);
             _sbManagementClient = new ServiceBusManagementClient(creds) { SubscriptionId = _options.SubscriptionId };
@@ -95,6 +101,7 @@ namespace Foundatio.Messaging {
                     return;
 
                 var sw = Stopwatch.StartNew();
+                //todo: see if the catch handler is needed
                 try {
                     await _sbManagementClient.Topics.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Topic, CreateTopicDescription()).AnyContext();
                 } catch (ErrorResponseException) { }
