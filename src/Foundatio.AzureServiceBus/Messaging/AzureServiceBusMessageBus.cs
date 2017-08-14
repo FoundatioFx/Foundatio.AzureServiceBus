@@ -104,7 +104,10 @@ namespace Foundatio.Messaging {
                 //todo: see if the catch handler is needed
                 try {
                     await _sbManagementClient.Topics.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Topic, CreateTopicDescription()).AnyContext();
-                } catch (ErrorResponseException) { }
+                } catch (ErrorResponseException e) 
+                {
+                    var str = e.InnerException.Message;
+                }
 
                 _topicClient = new TopicClient(_options.ConnectionString, _options.Topic);
                 sw.Stop();

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Foundatio.Extensions;
@@ -85,7 +85,9 @@ namespace Foundatio.Queues {
                 var sw = Stopwatch.StartNew();
                 try {
                     await _sbManagementClient.Queues.CreateOrUpdateAsync (_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription()).AnyContext();
-                } catch (ErrorResponseException) { }
+                } catch (ErrorResponseException e) {
+                    var msg = e.InnerException.Message;
+                }
 
                 _queueClient = new QueueClient(_options.ConnectionString, _options.Name, ReceiveMode.PeekLock, _options.RetryPolicy);
                 sw.Stop();
@@ -133,9 +135,10 @@ namespace Foundatio.Queues {
             Interlocked.Increment(ref _enqueuedCount);
             var message = await _serializer.SerializeAsync(data).AnyContext();
             var brokeredMessage = new Message(message);
+            brokeredMessage.MessageId = Guid.NewGuid().ToString();
             await _queueClient.SendAsync(brokeredMessage).AnyContext(); // TODO: See if there is a way to send a batch of messages.
 
-            var entry = new QueueEntry<T>(brokeredMessage.SystemProperties.LockToken, data, this, SystemClock.UtcNow, 0);
+            var entry = new QueueEntry<T>(brokeredMessage.MessageId, data, this, SystemClock.UtcNow, 0);
             await OnEnqueuedAsync(entry).AnyContext();
 
             return brokeredMessage.MessageId;
@@ -189,8 +192,8 @@ namespace Foundatio.Queues {
 
         public override async Task RenewLockAsync(IQueueEntry<T> entry) {
             _logger.Debug("Queue {0} renew lock item: {1}", _options.Name, entry.Id);
-
-            await _messageReceiver.RenewLockAsync(entry.Id).AnyContext();
+            Message m = entry.Value as Message;
+            await _messageReceiver.RenewLockAsync(m).AnyContext();
             await OnLockRenewedAsync(entry).AnyContext();
             _logger.Trace("Renew lock done: {0}", entry.Id);
         }
@@ -222,12 +225,14 @@ namespace Foundatio.Queues {
         private async Task<IQueueEntry<T>> HandleDequeueAsync(Message brokeredMessage) {
             if (brokeredMessage == null)
                 return null;
-
-            var message = await _serializer.DeserializeAsync<T>(brokeredMessage.Body).AnyContext();
+            try {
+                var message = await _serializer.DeserializeAsync<T>(brokeredMessage.Body).AnyContext();
+            }
+            catch (Exception e) { }
             Interlocked.Increment(ref _dequeuedCount);
-            var entry = new QueueEntry<T>(brokeredMessage.SystemProperties.LockToken, message, this,
-                brokeredMessage.ScheduledEnqueueTimeUtc, brokeredMessage.SystemProperties.DeliveryCount);
-            await OnDequeuedAsync(entry).AnyContext();
+                var entry = new QueueEntry<T>(brokeredMessage.SystemProperties.LockToken, brokeredMessage as T, this,
+                    brokeredMessage.ScheduledEnqueueTimeUtc, brokeredMessage.SystemProperties.DeliveryCount);
+                await OnDequeuedAsync(entry).AnyContext();
             return entry;
         }
 
