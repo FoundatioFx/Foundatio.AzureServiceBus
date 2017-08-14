@@ -9,7 +9,6 @@ using Foundatio.Logging;
 using Foundatio.Serializer;
 using Foundatio.Utility;
 using Microsoft.Azure.ServiceBus;
-using Microsoft.Azure.ServiceBus.Primitives;
 using Microsoft.Azure.Management.ServiceBus;
 using Microsoft.Azure.Management.ServiceBus.Models;
 using Microsoft.Azure.ServiceBus.Core;
@@ -27,21 +26,6 @@ namespace Foundatio.Queues {
         private long _completedCount;
         private long _abandonedCount;
         private long _workerErrorCount;
-
-        [Obsolete("Use the options overload")]
-        public AzureServiceBusQueue(string connectionString, string queueName = null, int retries = 2, TimeSpan? workItemTimeout = null, RetryPolicy retryPolicy = null, ISerializer serializer = null, IEnumerable<IQueueBehavior<T>> behaviors = null, ILoggerFactory loggerFactory = null, TimeSpan? autoDeleteOnIdle = null, TimeSpan? defaultMessageTimeToLive = null)
-            : this(new AzureServiceBusQueueOptions<T>() {
-                ConnectionString = connectionString,
-                Name = queueName,
-                Retries = retries,
-                RetryPolicy = retryPolicy,
-                AutoDeleteOnIdle = autoDeleteOnIdle.GetValueOrDefault(TimeSpan.MaxValue),
-                DefaultMessageTimeToLive = defaultMessageTimeToLive.GetValueOrDefault(TimeSpan.MaxValue),
-                WorkItemTimeout = workItemTimeout.GetValueOrDefault(TimeSpan.FromMinutes(5)),
-                Behaviors = behaviors,
-                Serializer = serializer,
-                LoggerFactory = loggerFactory
-            }) { }
 
         public AzureServiceBusQueue(AzureServiceBusQueueOptions<T> options) : base(options) {
             if (String.IsNullOrEmpty(options.ConnectionString))
@@ -85,8 +69,9 @@ namespace Foundatio.Queues {
                 var sw = Stopwatch.StartNew();
                 try {
                     await _sbManagementClient.Queues.CreateOrUpdateAsync (_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription()).AnyContext();
-                } catch (ErrorResponseException e) {
-                    var msg = e.InnerException.Message;
+                }
+                catch (ErrorResponseException e) {
+                    _logger.Error(e, "Errror while creating the queue");
                 }
 
                 _queueClient = new QueueClient(_options.ConnectionString, _options.Name, ReceiveMode.PeekLock, _options.RetryPolicy);
@@ -192,7 +177,7 @@ namespace Foundatio.Queues {
 
         public override async Task RenewLockAsync(IQueueEntry<T> entry) {
             _logger.Debug("Queue {0} renew lock item: {1}", _options.Name, entry.Id);
-            Message m = entry.Value as Message;
+            var m = entry.Value as Message;
             await _messageReceiver.RenewLockAsync(m).AnyContext();
             await OnLockRenewedAsync(entry).AnyContext();
             _logger.Trace("Renew lock done: {0}", entry.Id);
@@ -225,10 +210,9 @@ namespace Foundatio.Queues {
         private async Task<IQueueEntry<T>> HandleDequeueAsync(Message brokeredMessage) {
             if (brokeredMessage == null)
                 return null;
-            try {
-                var message = await _serializer.DeserializeAsync<T>(brokeredMessage.Body).AnyContext();
-            }
-            catch (Exception e) { }
+
+            var message = await _serializer.DeserializeAsync<T>(brokeredMessage.Body).AnyContext();
+
             Interlocked.Increment(ref _dequeuedCount);
                 var entry = new QueueEntry<T>(brokeredMessage.SystemProperties.LockToken, brokeredMessage as T, this,
                     brokeredMessage.ScheduledEnqueueTimeUtc, brokeredMessage.SystemProperties.DeliveryCount);

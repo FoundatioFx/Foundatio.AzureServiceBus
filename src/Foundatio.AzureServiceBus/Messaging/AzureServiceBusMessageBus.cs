@@ -22,9 +22,6 @@ namespace Foundatio.Messaging {
         private readonly string _subscriptionName;
         private readonly ServiceBusManagementClient _sbManagementClient;
 
-        [Obsolete("Use the options overload")]
-        public AzureServiceBusMessageBus(string connectionString, string topicName, ISerializer serializer = null, ILoggerFactory loggerFactory = null) : this(new AzureServiceBusMessageBusOptions { ConnectionString = connectionString, Topic = topicName, SubscriptionName = "MessageBus", Serializer = serializer, LoggerFactory = loggerFactory }) { }
-
         public AzureServiceBusMessageBus(AzureServiceBusMessageBusOptions options) : base(options) {
             if (String.IsNullOrEmpty(options.ConnectionString))
                 throw new ArgumentException("ConnectionString is required.");
