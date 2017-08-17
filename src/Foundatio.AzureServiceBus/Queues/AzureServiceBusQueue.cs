@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Foundatio.Extensions;
@@ -9,6 +8,7 @@ using Foundatio.Logging;
 using Foundatio.Serializer;
 using Foundatio.Utility;
 using Microsoft.Azure.ServiceBus;
+using Foundatio.AzureServiceBus.Utility;
 using Microsoft.Azure.Management.ServiceBus;
 using Microsoft.Azure.Management.ServiceBus.Models;
 using Microsoft.Azure.ServiceBus.Core;
@@ -18,9 +18,10 @@ using Nito.AsyncEx;
 namespace Foundatio.Queues {
     public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<T>> where T : class {
         private readonly AsyncLock _lock = new AsyncLock();
-        private readonly ServiceBusManagementClient _sbManagementClient;
         private readonly MessageReceiver _messageReceiver;
         private QueueClient _queueClient;
+        private string _tokenValue = String.Empty;
+        private DateTime _tokenExpiresAtUtc = DateTime.MinValue;
         private long _enqueuedCount;
         private long _dequeuedCount;
         private long _completedCount;
@@ -30,9 +31,6 @@ namespace Foundatio.Queues {
         public AzureServiceBusQueue(AzureServiceBusQueueOptions<T> options) : base(options) {
             if (String.IsNullOrEmpty(options.ConnectionString))
                 throw new ArgumentException("ConnectionString is required.");
-
-            if (String.IsNullOrEmpty(options.Token))
-                throw new ArgumentException("Token is required.");
 
             if (String.IsNullOrEmpty(options.SubscriptionId))
                 throw new ArgumentException("SubscriptionId is required.");
@@ -53,8 +51,6 @@ namespace Foundatio.Queues {
             if (options.UserMetadata != null && options.UserMetadata.Length > 260)
                 throw new ArgumentException("Queue UserMetadata must be less than 1024 characters.");
 
-            var creds = new TokenCredentials(_options.Token);
-            _sbManagementClient = new ServiceBusManagementClient(creds) { SubscriptionId = _options.SubscriptionId };
             _messageReceiver = new MessageReceiver(_options.ConnectionString, _options.Name);
         }
 
@@ -68,7 +64,11 @@ namespace Foundatio.Queues {
 
                 var sw = Stopwatch.StartNew();
                 try {
-                    await _sbManagementClient.Queues.CreateOrUpdateAsync (_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription()).AnyContext();
+                    var sbManagementClient = await GetManagementClient();
+                    if (sbManagementClient != null) {
+                        await sbManagementClient.Queues.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription()).AnyContext();
+
+                    }
                 }
                 catch (ErrorResponseException e) {
                     _logger.Error(e, "Errror while creating the queue");
@@ -81,10 +81,14 @@ namespace Foundatio.Queues {
         }
 
         public override async Task DeleteQueueAsync() {
-            var getQueueResponse = await _sbManagementClient.Queues.GetAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
+            var sbManagementClient = await GetManagementClient();
+            if (sbManagementClient == null) {
+                return;
+            }
+            var getQueueResponse = await sbManagementClient.Queues.GetAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
             // todo: test if this condition is necessary and delete can be called without condition
             if (getQueueResponse.Status == EntityStatus.Active)
-                await _sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
+                await sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
 
             _queueClient = null;
             _enqueuedCount = 0;
@@ -95,7 +99,12 @@ namespace Foundatio.Queues {
         }
 
         protected override async Task<QueueStats> GetQueueStatsImplAsync() {
-            var q = await _sbManagementClient.Queues.GetAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name).AnyContext();
+
+            var sbManagementClient = await GetManagementClient().AnyContext();
+            if (sbManagementClient == null) {
+                return null;
+            }
+            var q = await sbManagementClient.Queues.GetAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name).AnyContext();
             return new QueueStats {
                 Queued = q.MessageCount ?? default(long),
                 Working = 0,
@@ -122,7 +131,6 @@ namespace Foundatio.Queues {
             var brokeredMessage = new Message(message);
             brokeredMessage.MessageId = Guid.NewGuid().ToString();
             await _queueClient.SendAsync(brokeredMessage).AnyContext(); // TODO: See if there is a way to send a batch of messages.
-
             var entry = new QueueEntry<T>(brokeredMessage.MessageId, data, this, SystemClock.UtcNow, 0);
             await OnEnqueuedAsync(entry).AnyContext();
 
@@ -156,9 +164,9 @@ namespace Foundatio.Queues {
             }, new MessageHandlerOptions(OnExceptionAsync) { AutoComplete = false });
         }
 
-        private async Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
-            _logger.Warn(args.Exception, "OnExceptionAsync({0}) Error in the message pump {1}. Trying again..", args.Exception.Message);
-            return;
+        private Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
+            _logger.Warn(args.Exception, "Message handler encountered an exception.");
+            return Task.CompletedTask;
         }
 
         public override async Task<IQueueEntry<T>> DequeueAsync(TimeSpan? timeout = null) {
@@ -167,7 +175,6 @@ namespace Foundatio.Queues {
             var msg = await _messageReceiver.ReceiveAsync(timeout.GetValueOrDefault(TimeSpan.FromSeconds(30))).AnyContext();
 
             return await HandleDequeueAsync(msg).AnyContext();
-            
         }
 
         protected override Task<IQueueEntry<T>> DequeueImplAsync(CancellationToken cancellationToken) {
@@ -275,6 +282,18 @@ namespace Foundatio.Queues {
             //    qd.UserMetadata = _options.UserMetadata;
 
             return qd;
+        }
+
+        protected virtual async Task<ServiceBusManagementClient> GetManagementClient() {
+            var token = await AuthHelper.GetToken(_tokenValue, _tokenExpiresAtUtc, _options.TenantId, _options.ClientId, _options.ClientSecret).AnyContext();
+            if (token == null)
+                return null;
+
+            _tokenValue = token.TokenValue;
+            _tokenExpiresAtUtc = token.TokenExpiresAtUtc;
+
+            var creds = new TokenCredentials(token.TokenValue);
+            return new ServiceBusManagementClient(creds) { SubscriptionId = _options.SubscriptionId };
         }
 
         public override void Dispose() {

@@ -5,7 +5,11 @@ using Microsoft.Azure.Management.ServiceBus.Models;
 namespace Foundatio.Messaging {
     public class AzureServiceBusMessageBusOptions : MessageBusOptionsBase {
 
-        public string Token { get; set; }
+        public string ClientId { get; set; }
+
+        public string ClientSecret { get; set; }
+
+        public string TenantId { get; set; }
 
         public string SubscriptionId { get; set; }
 
@@ -20,6 +24,11 @@ namespace Foundatio.Messaging {
         /// https://docs.microsoft.com/en-us/azure/service-bus-messaging/service-bus-performance-improvements
         /// </summary>
         public int? PrefetchCount { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum number of concurrent calls to the callback the message pump should initiate. Default value is 1
+        /// </summary>
+        public int? MaxConcurrentCalls { get; set; }
 
         /// <summary>
         /// The idle interval after which the topic is automatically deleted. The minimum duration is 5 minutes.
@@ -60,6 +69,19 @@ namespace Foundatio.Messaging {
         /// Returns true if the message is anonymous accessible.
         /// </summary>
         public bool? TopicIsAnonymousAccessible { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value that indicates whether the message-pump should call Complete(Guid) or Complete(Guid) on messages
+        /// after the callback has completed processing. By default its set to TRUE
+        /// </summary>
+        public bool? AutoComplete { get; set; }
+
+        /// <summary>
+        /// There are wo different receive modes in Service Bus. PeekLock is set by default. For Subscription its best to use 
+        /// ReceiveAndDelete with AutoComplete set to true or PeekAndLock with AutoComplete set to true.
+        /// This way azure message pump will take care of calling completeasync for you.
+        /// </summary>
+        public ReceiveMode ReceiveMode { get; set; }
 
         /// <summary>
         /// Returns the status of the topic (enabled or disabled). When an entity is disabled, that entity cannot send or receive messages.

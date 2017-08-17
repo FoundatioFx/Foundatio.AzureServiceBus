@@ -8,7 +8,7 @@ using Foundatio.Logging;
 using Foundatio.Serializer;
 using Foundatio.Utility;
 using Microsoft.Azure.ServiceBus;
-using Microsoft.Azure.ServiceBus.Primitives;
+using Foundatio.AzureServiceBus.Utility;
 using Microsoft.Azure.Management.ServiceBus;
 using Microsoft.Azure.Management.ServiceBus.Models;
 using Microsoft.Rest;
@@ -20,21 +20,17 @@ namespace Foundatio.Messaging {
         private TopicClient _topicClient;
         private SubscriptionClient _subscriptionClient;
         private readonly string _subscriptionName;
-        private readonly ServiceBusManagementClient _sbManagementClient;
+        private string _tokenValue = String.Empty;
+        private DateTime _tokenExpiresAtUtc = DateTime.MinValue;
 
         public AzureServiceBusMessageBus(AzureServiceBusMessageBusOptions options) : base(options) {
             if (String.IsNullOrEmpty(options.ConnectionString))
                 throw new ArgumentException("ConnectionString is required.");
 
-            if (String.IsNullOrEmpty(options.Token))
-                throw new ArgumentException("Token is required.");
-
             if (String.IsNullOrEmpty(options.SubscriptionId))
                 throw new ArgumentException("SubscriptionId is required.");
 
             _subscriptionName = _options.SubscriptionName ?? MessageBusId;
-            var creds = new TokenCredentials(_options.Token);
-            _sbManagementClient = new ServiceBusManagementClient(creds) { SubscriptionId = _options.SubscriptionId };
         }
 
         protected override async Task EnsureTopicSubscriptionAsync(CancellationToken cancellationToken) {
@@ -49,26 +45,42 @@ namespace Foundatio.Messaging {
 
                 var sw = Stopwatch.StartNew();
                 try {
-                    await _sbManagementClient.Subscriptions.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName,
-                        _options.Topic, _options.SubscriptionName, CreateSubscriptionDescription()).AnyContext();
+                    var sbManagementClient = await GetManagementClient().AnyContext();
+                    if (sbManagementClient != null) {
+                        await sbManagementClient.Subscriptions.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName,
+                            _options.Topic, _options.SubscriptionName, CreateSubscriptionDescription()).AnyContext();
+                    }
                 }
                 catch (ErrorResponseException) { }
 
                 // Look into message factory with multiple recievers so more than one connection is made and managed....
-                _subscriptionClient = new SubscriptionClient(_options.ConnectionString, _options.Topic, _options.SubscriptionName, ReceiveMode.ReceiveAndDelete, _options.SubscriptionRetryPolicy);
+                _subscriptionClient = new SubscriptionClient(_options.ConnectionString, _options.Topic, _options.SubscriptionName, _options.ReceiveMode, _options.SubscriptionRetryPolicy);
+                
+                // See if this blows up?
+                
                 // Enable prefetch to speeden up the receive rate.
                 if (_options.PrefetchCount.HasValue)
                     _subscriptionClient.PrefetchCount = _options.PrefetchCount.Value;
 
-                _subscriptionClient.RegisterMessageHandler(OnMessageAsync, new MessageHandlerOptions(OnExceptionAsync) { MaxConcurrentCalls = 6 });
+                // these are the default values of MessageHandlerOptions
+                int maxConcurrentCalls = 1;
+                bool autoComplete = true;
+                if (_options.MaxConcurrentCalls.HasValue)
+                    maxConcurrentCalls = _options.MaxConcurrentCalls.Value;
+
+                if (_options.AutoComplete.HasValue)
+                    autoComplete = _options.AutoComplete.Value;
+
+                _subscriptionClient.RegisterMessageHandler(OnMessageAsync, new MessageHandlerOptions(OnExceptionAsync) { MaxConcurrentCalls = maxConcurrentCalls, AutoComplete = autoComplete });
                 sw.Stop();
                 _logger.Trace("Ensure topic subscription exists took {0}ms.", sw.ElapsedMilliseconds);
             }
         }
 
-        private async Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
-            _logger.Warn(args.Exception, "OnExceptionAsync({0}) Error in the message pump {1}. Trying again..", args.Exception.Message);
-            return ;
+        // Use this Handler to look at the exceptions received on the MessagePump
+        private Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
+            _logger.Warn(args.Exception, "Message handler encountered an exception.");
+            return Task.CompletedTask ;
         }
 
         private async Task OnMessageAsync(Message  brokeredMessage, CancellationToken cancellationToken) {
@@ -86,6 +98,19 @@ namespace Foundatio.Messaging {
                 return;
             }
 
+            // NOTES : Please read carefully.
+            // There is no need to call CompleteAsync if the receive mode is set to "ReceiveAndDelete".
+            // If the ReceiveMode is set to PeekLock and AutoComplete is true then on return of the OnMessageAsync, azure libary takes care of calling CompleteAsync.
+            // Please use the below code on the client side only if you intend to pass ReceiveMode as PeekLock and AutoComplete as False.
+            // Again, By default the Recieve mode is peek lock and autocomplete is also true. In that case Azure library takes care of completing the message for you
+            // as soon as the OnMessage is returned. This holds true for 
+            // ReceiveAndDelete option as well.If you have ReceiveMode set ReceiveDelete then there is never a reason to call Message.Complete as the message is
+            // already removed from the queue.
+            // Caution : This below setting is not recommended because the user may forgot to call CompleteAsync, and then a message would keep appearing,
+            // until it is eventually dead-lettered
+            //if (_options.ReceiveMode == ReceiveMode.PeekLock && _options.AutoComplete == false) {
+            //    await _subscriptionClient.CompleteAsync(brokeredMessage.SystemProperties.LockToken).AnyContext();
+            //}
             await SendMessageToSubscribersAsync(message, _serializer).AnyContext();
         }
 
@@ -98,12 +123,15 @@ namespace Foundatio.Messaging {
                     return;
 
                 var sw = Stopwatch.StartNew();
-                //todo: see if the catch handler is needed
                 try {
-                    await _sbManagementClient.Topics.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Topic, CreateTopicDescription()).AnyContext();
-                } catch (ErrorResponseException e) 
-                {
-                    var str = e.InnerException.Message;
+                    var sbManagementClient = await GetManagementClient().AnyContext();
+                    if (sbManagementClient != null) {
+                        await sbManagementClient.Topics.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Topic, CreateTopicDescription()).AnyContext();
+
+                    }
+                } catch (ErrorResponseException e) {
+                    _logger.Error(e, "Error creating Topic Entity");
+                    throw e;
                 }
 
                 _topicClient = new TopicClient(_options.ConnectionString, _options.Topic);
@@ -128,7 +156,12 @@ namespace Foundatio.Messaging {
                 _logger.Trace("Message Publish: {messageType}", messageType.FullName);
             }
 
-            await _topicClient.SendAsync(brokeredMessage).AnyContext();
+            try {
+                await _topicClient.SendAsync(brokeredMessage).AnyContext();
+            }
+            catch (MessagingEntityNotFoundException e) {
+                _logger.Error(e, "Make sure Entity is created");
+            }
         }
 
         private SBTopic CreateTopicDescription() {
@@ -248,6 +281,18 @@ namespace Foundatio.Messaging {
                 await _subscriptionClient?.CloseAsync();
                 _subscriptionClient = null;
             }
+        }
+
+        protected virtual async Task<ServiceBusManagementClient> GetManagementClient() {
+            var token = await AuthHelper.GetToken(_tokenValue, _tokenExpiresAtUtc, _options.TenantId, _options.ClientId, _options.ClientSecret).AnyContext();
+            if (token == null)
+                return null;
+
+            _tokenValue = token.TokenValue;
+            _tokenExpiresAtUtc = token.TokenExpiresAtUtc;
+
+            var creds = new TokenCredentials(token.TokenValue);
+            return new ServiceBusManagementClient(creds) { SubscriptionId = _options.SubscriptionId };
         }
     }
 }

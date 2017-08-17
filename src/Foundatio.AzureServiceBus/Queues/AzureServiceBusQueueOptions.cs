@@ -5,7 +5,11 @@ using Microsoft.Azure.Management.ServiceBus.Models;
 namespace Foundatio.Queues {
     public class AzureServiceBusQueueOptions<T> : QueueOptionsBase<T> where T : class {
 
-        public string Token { get; set; }
+        public string ClientId { get; set; }
+
+        public string ClientSecret { get; set; }
+
+        public string TenantId { get; set; }
 
         public string SubscriptionId { get; set; }
 
