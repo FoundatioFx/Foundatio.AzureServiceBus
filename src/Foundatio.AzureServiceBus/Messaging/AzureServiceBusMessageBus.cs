@@ -48,13 +48,13 @@ namespace Foundatio.Messaging {
                     var sbManagementClient = await GetManagementClient().AnyContext();
                     if (sbManagementClient != null) {
                         await sbManagementClient.Subscriptions.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName,
-                            _options.Topic, _options.SubscriptionName, CreateSubscriptionDescription()).AnyContext();
+                            _options.Topic, _subscriptionName, CreateSubscriptionDescription()).AnyContext();
                     }
                 }
                 catch (ErrorResponseException) { }
 
                 // Look into message factory with multiple recievers so more than one connection is made and managed....
-                _subscriptionClient = new SubscriptionClient(_options.ConnectionString, _options.Topic, _options.SubscriptionName, _options.ReceiveMode, _options.SubscriptionRetryPolicy);
+                _subscriptionClient = new SubscriptionClient(_options.ConnectionString, _options.Topic, _subscriptionName, _options.ReceiveMode, _options.SubscriptionRetryPolicy);
                 
                 // See if this blows up?
                 
