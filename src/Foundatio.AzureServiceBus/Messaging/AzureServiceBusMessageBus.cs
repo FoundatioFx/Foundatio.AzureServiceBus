@@ -227,6 +227,7 @@ namespace Foundatio.Messaging {
             if (_options.SubscriptionEnableDeadLetteringOnMessageExpiration.HasValue)
                 sd.DeadLetteringOnMessageExpiration = _options.SubscriptionEnableDeadLetteringOnMessageExpiration.Value;
 
+            // https://github.com/Azure/azure-service-bus-dotnet/issues/255 - Its a bug and should be fixed in the next release.
             //if (_options.SubscriptionEnableDeadLetteringOnFilterEvaluationExceptions.HasValue)
             //    sd.EnableDeadLetteringOnFilterEvaluationExceptions = _options.SubscriptionEnableDeadLetteringOnFilterEvaluationExceptions.Value;
 
