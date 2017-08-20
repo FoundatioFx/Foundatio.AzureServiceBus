@@ -148,6 +148,7 @@ namespace Foundatio.Messaging {
 
             
             var brokeredMessage = new Message(data);
+            brokeredMessage.MessageId = Guid.NewGuid().ToString();
 
             if (delay.HasValue && delay.Value > TimeSpan.Zero) {
                 _logger.Trace("Schedule delayed message: {messageType} ({delay}ms)", messageType.FullName, delay.Value.TotalMilliseconds);
@@ -252,13 +253,13 @@ namespace Foundatio.Messaging {
             return sd;
         }
 
-        public override void Dispose() {
+        public async override void Dispose() {
             base.Dispose();
-            CloseTopicClient();
-            CloseSubscriptionClient();
+            CloseTopicClientAsync();
+            CloseSubscriptionClientAsync();
         }
 
-        private async Task CloseTopicClient() {
+        private async Task CloseTopicClientAsync() {
             if (_topicClient == null)
                 return;
 
@@ -271,7 +272,7 @@ namespace Foundatio.Messaging {
             }
         }
 
-        private async Task CloseSubscriptionClient() {
+        private async Task CloseSubscriptionClientAsync() {
             if (_subscriptionClient == null)
                 return;
 

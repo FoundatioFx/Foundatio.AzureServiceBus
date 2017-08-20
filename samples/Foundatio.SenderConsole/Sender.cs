@@ -40,20 +40,23 @@ namespace Foundatio.SenderConsole {
                 ConnectionString = Configuration.GetSection("ConnectionString").Value,
                 SubscriptionId = Configuration.GetSection("SubscriptionId").Value,
                 ResourceGroupName = Configuration.GetSection("ResourceGroupName").Value,
-                NameSpaceName = Configuration.GetSection("NameSpaceName").Value
+                NameSpaceName = Configuration.GetSection("NameSpaceName").Value,
+                WorkItemTimeout = TimeSpan.FromMinutes(3)
             });
 
             do {
                 message = Console.ReadLine();
                 await queue.EnqueueAsync(message);
+                var stats = await queue.GetQueueStatsAsync();
+                Console.WriteLine($" Stats: Queued {stats.Enqueued } Dequeud {stats.Dequeued}");
             } while (message != null);
         }
 
         public Task Run(string[] args) {
             Console.WriteLine("Type your message...");
 
-            return TestTopic();
-            //return TestQueue();
+            //return TestTopic();
+            return TestQueue();
         }
     }
 }

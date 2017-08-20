@@ -64,10 +64,9 @@ namespace Foundatio.Queues {
 
                 var sw = Stopwatch.StartNew();
                 try {
-                    var sbManagementClient = await GetManagementClient();
+                    var sbManagementClient = await GetManagementClient().AnyContext();
                     if (sbManagementClient != null) {
                         await sbManagementClient.Queues.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription()).AnyContext();
-
                     }
                 }
                 catch (ErrorResponseException e) {
@@ -81,14 +80,14 @@ namespace Foundatio.Queues {
         }
 
         public override async Task DeleteQueueAsync() {
-            var sbManagementClient = await GetManagementClient();
+            var sbManagementClient = await GetManagementClient().AnyContext();
             if (sbManagementClient == null) {
                 return;
             }
             var getQueueResponse = await sbManagementClient.Queues.GetAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
             // todo: test if this condition is necessary and delete can be called without condition
             if (getQueueResponse.Status == EntityStatus.Active)
-                await sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
+                await sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name).AnyContext();
 
             _queueClient = null;
             _enqueuedCount = 0;
@@ -151,8 +150,6 @@ namespace Foundatio.Queues {
 
                 try {
                     await handler(queueEntry, linkedCancellationToken).AnyContext();
-                    if (autoComplete && !queueEntry.IsAbandoned && !queueEntry.IsCompleted)
-                        await queueEntry.CompleteAsync().AnyContext();
                 }
                 catch (Exception ex) {
                     Interlocked.Increment(ref _workerErrorCount);
@@ -161,7 +158,11 @@ namespace Foundatio.Queues {
                     if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
                         await queueEntry.AbandonAsync().AnyContext();
                 }
-            }, new MessageHandlerOptions(OnExceptionAsync) { AutoComplete = false });
+                // AutoComplete is true by default.
+                // todo: if AutoComplete is set to false in the MessageHandlerOptions and we attempt to call
+                // CompleteAsync then exception is getting thrown.
+                // ex = {"The lock supplied is invalid. Either the lock expired, or the message has already been removed from the queue."}
+            }, new MessageHandlerOptions(OnExceptionAsync) { });
         }
 
         private Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
@@ -195,7 +196,7 @@ namespace Foundatio.Queues {
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
-            await _queueClient.CompleteAsync(entry.Id).AnyContext();
+            await _messageReceiver.CompleteAsync(entry.Id).AnyContext();
             Interlocked.Increment(ref _completedCount);
             entry.MarkCompleted();
             await OnCompletedAsync(entry).AnyContext();
