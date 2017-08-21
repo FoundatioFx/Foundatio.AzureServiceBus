@@ -84,10 +84,8 @@ namespace Foundatio.Queues {
             if (sbManagementClient == null) {
                 return;
             }
-            var getQueueResponse = await sbManagementClient.Queues.GetAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
-            // todo: test if this condition is necessary and delete can be called without condition
-            if (getQueueResponse.Status == EntityStatus.Active)
-                await sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name).AnyContext();
+
+            await sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name).AnyContext();
 
             _queueClient = null;
             _enqueuedCount = 0;
@@ -208,7 +206,7 @@ namespace Foundatio.Queues {
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
-            await _queueClient.AbandonAsync(entry.Id).AnyContext();
+            await _messageReceiver.AbandonAsync(entry.Id).AnyContext();
             Interlocked.Increment(ref _abandonedCount);
             entry.MarkAbandoned();
             await OnAbandonedAsync(entry).AnyContext();
