@@ -1,23 +1,23 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <Import Project="..\..\build\common.props" />
   <PropertyGroup>
-    <TargetFrameworks>net46</TargetFrameworks>
+    <TargetFrameworks>netstandard2.0</TargetFrameworks>
     <PackageTags>Queue;Messaging;Message;Bus;ServiceBus;Distributed;Azure;broker;NETSTANDARD;Core</PackageTags>
     <Version>5.0.0-dev</Version>
     <GeneratePackageOnBuild>False</GeneratePackageOnBuild>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(TargetFramework)|$(Platform)'=='Debug|net46|AnyCPU'">
-    <DocumentationFile />
-  </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Foundatio" Version="5.1.1474" />
+    <PackageReference Include="Foundatio" Version="5.1.1490" />
     <PackageReference Include="Microsoft.Azure.Management.ResourceManager" Version="1.6.0-preview" />
-    <PackageReference Include="Microsoft.Azure.Management.ServiceBus" Version="1.0.0" />
+    <PackageReference Include="Microsoft.Azure.Management.ServiceBus" Version="1.0.1" />
     <PackageReference Include="Microsoft.Azure.ServiceBus" Version="1.0.0" />
     <PackageReference Include="Microsoft.IdentityModel.Clients.ActiveDirectory" Version="3.16.0" />
     <PackageReference Include="System.Net.Http" Version="4.3.2" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="Properties\" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Update="SourceLink.Create.GitHub" Version="2.2.0" />
   </ItemGroup>
 </Project>

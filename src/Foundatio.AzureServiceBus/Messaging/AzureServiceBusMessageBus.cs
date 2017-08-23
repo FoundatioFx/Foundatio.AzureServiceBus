@@ -12,7 +12,7 @@ using Foundatio.AzureServiceBus.Utility;
 using Microsoft.Azure.Management.ServiceBus;
 using Microsoft.Azure.Management.ServiceBus.Models;
 using Microsoft.Rest;
-using Nito.AsyncEx;
+using Foundatio.AsyncEx;
 
 namespace Foundatio.Messaging {
     public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBusOptions> {
