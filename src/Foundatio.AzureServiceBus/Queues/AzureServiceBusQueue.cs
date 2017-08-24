@@ -206,7 +206,7 @@ namespace Foundatio.Queues {
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
-            await _messageReceiver.AbandonAsync(entry.Id).AnyContext();
+            await _queueClient.AbandonAsync(entry.Id).AnyContext();
             Interlocked.Increment(ref _abandonedCount);
             entry.MarkAbandoned();
             await OnAbandonedAsync(entry).AnyContext();
