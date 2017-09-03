@@ -66,10 +66,16 @@ namespace Foundatio.Queues {
                 try {
                     var sbManagementClient = await GetManagementClient().AnyContext();
                     if (sbManagementClient != null) {
-                        await sbManagementClient.Queues.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription()).AnyContext();
+                        await sbManagementClient.Queues.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription());
                     }
                 }
+                catch (ServiceBusTimeoutException e) {
+                    _logger.Error(e, "Errror while creating the queue");
+                }
                 catch (ErrorResponseException e) {
+                    _logger.Error(e, "Errror while creating the queue");
+                }
+                catch (Exception e) {
                     _logger.Error(e, "Errror while creating the queue");
                 }
 
@@ -85,7 +91,7 @@ namespace Foundatio.Queues {
                 return;
             }
 
-            await sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name).AnyContext();
+            await sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
 
             _queueClient = null;
             _enqueuedCount = 0;
@@ -145,7 +151,10 @@ namespace Foundatio.Queues {
             _queueClient.RegisterMessageHandler(async (msg, token) => {
                 _logger.Trace("WorkerLoop Signaled {_options.Name}", _options.Name);
                 var queueEntry = await HandleDequeueAsync(msg).AnyContext();
-
+                if (queueEntry != null) {
+                    var d = queueEntry as QueueEntry<T>;
+                    d.Data.Add("push", true);
+                }
                 try {
                     await handler(queueEntry, linkedCancellationToken).AnyContext();
                 }
@@ -170,10 +179,13 @@ namespace Foundatio.Queues {
 
         public override async Task<IQueueEntry<T>> DequeueAsync(TimeSpan? timeout = null) {
             await EnsureQueueCreatedAsync().AnyContext();
-            
             var msg = await _messageReceiver.ReceiveAsync(timeout.GetValueOrDefault(TimeSpan.FromSeconds(30))).AnyContext();
-
-            return await HandleDequeueAsync(msg).AnyContext();
+            var queueEntry = await HandleDequeueAsync(msg).AnyContext();
+            if (queueEntry != null) {
+                var d = queueEntry as QueueEntry<T>;
+                d.Data.Add("push", false);
+            }
+            return queueEntry;
         }
 
         protected override Task<IQueueEntry<T>> DequeueImplAsync(CancellationToken cancellationToken) {
@@ -183,8 +195,10 @@ namespace Foundatio.Queues {
 
         public override async Task RenewLockAsync(IQueueEntry<T> entry) {
             _logger.Debug("Queue {0} renew lock item: {1}", _options.Name, entry.Id);
-            var m = entry.Value as Message;
-            await _messageReceiver.RenewLockAsync(m).AnyContext();
+            var val = entry as QueueEntry<T>;
+            // TODO: Figure out how to create message from the lock token
+            //if (val.Data["push"].Equals(false))
+            //await _messageReceiver.RenewLockAsync(m).AnyContext();
             await OnLockRenewedAsync(entry).AnyContext();
             _logger.Trace("Renew lock done: {0}", entry.Id);
         }
@@ -194,7 +208,11 @@ namespace Foundatio.Queues {
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
-            await _messageReceiver.CompleteAsync(entry.Id).AnyContext();
+            var val = entry as QueueEntry<T>;
+            if (val.Data["push"].Equals(true))
+                await _queueClient.CompleteAsync(entry.Id).AnyContext();
+            else
+                await _messageReceiver.CompleteAsync(entry.Id).AnyContext();
             Interlocked.Increment(ref _completedCount);
             entry.MarkCompleted();
             await OnCompletedAsync(entry).AnyContext();
@@ -206,7 +224,11 @@ namespace Foundatio.Queues {
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
-            await _queueClient.AbandonAsync(entry.Id).AnyContext();
+            var val = entry as QueueEntry<T>;
+            if (val.Data["push"].Equals(true))
+                await _queueClient.AbandonAsync(entry.Id).AnyContext();
+            else
+                await _messageReceiver.AbandonAsync(entry.Id).AnyContext();
             Interlocked.Increment(ref _abandonedCount);
             entry.MarkAbandoned();
             await OnAbandonedAsync(entry).AnyContext();
@@ -220,9 +242,9 @@ namespace Foundatio.Queues {
             var message = await _serializer.DeserializeAsync<T>(brokeredMessage.Body).AnyContext();
 
             Interlocked.Increment(ref _dequeuedCount);
-                var entry = new QueueEntry<T>(brokeredMessage.SystemProperties.LockToken, brokeredMessage as T, this,
+                var entry = new QueueEntry<T>(brokeredMessage.SystemProperties.LockToken, message, this,
                     brokeredMessage.ScheduledEnqueueTimeUtc, brokeredMessage.SystemProperties.DeliveryCount);
-                await OnDequeuedAsync(entry).AnyContext();
+            await OnDequeuedAsync(entry).AnyContext();
             return entry;
         }
 

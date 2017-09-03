@@ -17,18 +17,26 @@ namespace Foundatio.AzureServiceBus.Tests.Messaging {
                 return null;
 
             return new AzureServiceBusMessageBus(new AzureServiceBusMessageBusOptions {
-                ConnectionString = connectionString,
-                Topic = "test-messages",
-                TopicEnableBatchedOperations = true,
-                TopicEnableExpress = true,
-                TopicEnablePartitioning = true,
-                TopicSupportOrdering = false,
-                TopicRequiresDuplicateDetection = false,
-                SubscriptionAutoDeleteOnIdle = TimeSpan.FromMinutes(5),
-                SubscriptionEnableBatchedOperations = true,
-                SubscriptionMaxDeliveryCount = int.MaxValue,
-                PrefetchCount = 500,
-                LoggerFactory = Log
+                    Topic = "test-messages",
+                    ClientId = Configuration.GetSection("ClientId").Value,
+                    TenantId = Configuration.GetSection("TenantId").Value,
+                    ClientSecret = Configuration.GetSection("ClientSecret").Value,
+                    SubscriptionName = "Subscriber1",
+                    ConnectionString = Configuration.GetSection("ConnectionString").Value,
+                    SubscriptionId = Configuration.GetSection("SubscriptionId").Value,
+                    ResourceGroupName = Configuration.GetSection("ResourceGroupName").Value,
+                    NameSpaceName = Configuration.GetSection("NameSpaceName").Value,
+                    ReceiveMode = Microsoft.Azure.ServiceBus.ReceiveMode.ReceiveAndDelete,
+                    TopicEnableBatchedOperations = true,
+                    TopicEnableExpress = true,
+                    TopicEnablePartitioning = true,
+                    TopicSupportOrdering = false,
+                    TopicRequiresDuplicateDetection = false,
+                    SubscriptionAutoDeleteOnIdle = TimeSpan.FromMinutes(5),
+                    SubscriptionEnableBatchedOperations = true,
+                    SubscriptionMaxDeliveryCount = int.MaxValue,
+                    PrefetchCount = 500,
+                    LoggerFactory = Log
             });
         }
 
