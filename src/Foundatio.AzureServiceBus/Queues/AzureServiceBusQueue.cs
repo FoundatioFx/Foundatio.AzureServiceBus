@@ -179,7 +179,11 @@ namespace Foundatio.Queues {
 
         public override async Task<IQueueEntry<T>> DequeueAsync(TimeSpan? timeout = null) {
             await EnsureQueueCreatedAsync().AnyContext();
-            var msg = await _messageReceiver.ReceiveAsync(timeout.GetValueOrDefault(TimeSpan.FromSeconds(30))).AnyContext();
+            Message msg;
+            if (timeout <= TimeSpan.Zero)
+                msg = await _messageReceiver.ReceiveAsync().AnyContext();
+            else
+                msg = await _messageReceiver.ReceiveAsync(timeout.GetValueOrDefault(TimeSpan.FromSeconds(30))).AnyContext();
             var queueEntry = await HandleDequeueAsync(msg).AnyContext();
             if (queueEntry != null) {
                 var d = queueEntry as QueueEntry<T>;
