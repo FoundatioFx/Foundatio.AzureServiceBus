@@ -29,11 +29,11 @@ namespace Foundatio.Queues {
         private long _workerErrorCount;
 
         public AzureServiceBusQueue(AzureServiceBusQueueOptions<T> options) : base(options) {
-            if (String.IsNullOrEmpty(options.ConnectionString))
-                throw new ArgumentException("ConnectionString is required.");
+            if (String.IsNullOrWhiteSpace(options.ConnectionString))
+                throw new ArgumentException($"{nameof(options.ConnectionString)} is required.");
 
-            if (String.IsNullOrEmpty(options.SubscriptionId))
-                throw new ArgumentException("SubscriptionId is required.");
+            if (String.IsNullOrWhiteSpace(options.SubscriptionId))
+                throw new ArgumentException($"{nameof(options.SubscriptionId)} is required.");
 
             if (options.Name.Length > 260)
                 throw new ArgumentException("Queue name must be set and be less than 260 characters.");
@@ -153,20 +153,26 @@ namespace Foundatio.Queues {
                 var queueEntry = await HandleDequeueAsync(msg).AnyContext();
                 if (queueEntry != null) {
                     var d = queueEntry as QueueEntry<T>;
-                    d.Data.Add("push", true);
-                }
-                try {
-                    await handler(queueEntry, linkedCancellationToken).AnyContext();
-                }
-                catch (Exception ex) {
-                    Interlocked.Increment(ref _workerErrorCount);
-                    _logger.Warn(ex, "Error sending work item to worker: {0}", ex.Message);
+                    d?.Data.Add("Pull-Strategy", false);
+                    d?.Data.Add("LockedUntilUtc", msg.SystemProperties.LockedUntilUtc);
 
-                    if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
-                        await queueEntry.AbandonAsync().AnyContext();
+                    try {
+                        await handler(queueEntry, linkedCancellationToken).AnyContext();
+                        // Handler is registered with AutoComplete as TRUE by default.
+                        // todo: autoComplete parameter is not used because - See the Notes below.
+                        if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
+                            await queueEntry.CompleteAsync().AnyContext();
+                    }
+                    catch (Exception ex) {
+                        Interlocked.Increment(ref _workerErrorCount);
+                        _logger.Warn(ex, "Error sending work item to worker: {0}", ex.Message);
+
+                        if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
+                            await queueEntry.AbandonAsync().AnyContext();
+                    }
                 }
-                // AutoComplete is true by default.
-                // todo: if AutoComplete is set to false in the MessageHandlerOptions and we attempt to call
+                // AutoComplete is true by default in MessageHandlerOptions. In the old library it used to be false.
+                // NOTE AND TEST MORE: if AutoComplete is set to false in the MessageHandlerOptions and we attempt to call
                 // CompleteAsync then exception is getting thrown.
                 // ex = {"The lock supplied is invalid. Either the lock expired, or the message has already been removed from the queue."}
             }, new MessageHandlerOptions(OnExceptionAsync) { });
@@ -180,14 +186,20 @@ namespace Foundatio.Queues {
         public override async Task<IQueueEntry<T>> DequeueAsync(TimeSpan? timeout = null) {
             await EnsureQueueCreatedAsync().AnyContext();
             Message msg;
-            if (timeout <= TimeSpan.Zero)
-                msg = await _messageReceiver.ReceiveAsync().AnyContext();
-            else
-                msg = await _messageReceiver.ReceiveAsync(timeout.GetValueOrDefault(TimeSpan.FromSeconds(30))).AnyContext();
+            if (timeout <= TimeSpan.Zero) {
+                // todo: we will be passing min time and max timeout
+                _logger.Warn("Azure Service Bus throws Invalid argument exception. Calling ReceiveAsync with 1 secs timeout");
+                msg = await _messageReceiver.ReceiveAsync(TimeSpan.FromSeconds(1)).AnyContext();
+            }
+            else {
+                msg = await _messageReceiver.ReceiveAsync(timeout.GetValueOrDefault(TimeSpan.FromSeconds(30)))
+                    .AnyContext();
+            }
             var queueEntry = await HandleDequeueAsync(msg).AnyContext();
             if (queueEntry != null) {
                 var d = queueEntry as QueueEntry<T>;
-                d.Data.Add("push", false);
+                d?.Data.Add("Pull-Strategy", true);
+                d?.Data.Add("LockedUntilUtc", msg.SystemProperties.LockedUntilUtc);
             }
             return queueEntry;
         }
@@ -199,10 +211,12 @@ namespace Foundatio.Queues {
 
         public override async Task RenewLockAsync(IQueueEntry<T> entry) {
             _logger.Debug("Queue {0} renew lock item: {1}", _options.Name, entry.Id);
-            var val = entry as QueueEntry<T>;
-            // TODO: Figure out how to create message from the lock token
-            //if (val.Data["push"].Equals(false))
-            //await _messageReceiver.RenewLockAsync(m).AnyContext();
+
+            if (entry is QueueEntry<T> val && val.Data["Pull-Strategy"].Equals(true)) {
+                var newLockedUntilUtc = await _messageReceiver.RenewLockAsync(entry.Id).AnyContext();
+                _logger.Trace($"Renew lock done: { entry.Id} - {newLockedUntilUtc}");
+            }
+
             await OnLockRenewedAsync(entry).AnyContext();
             _logger.Trace("Renew lock done: {0}", entry.Id);
         }
@@ -212,11 +226,11 @@ namespace Foundatio.Queues {
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
-            var val = entry as QueueEntry<T>;
-            if (val.Data["push"].Equals(true))
-                await _queueClient.CompleteAsync(entry.Id).AnyContext();
-            else
+            // For push strategy AutoComplete is true by default and no need to call ASB CompleteAsync.
+            if (entry is QueueEntry<T> val && val.Data["Pull-Strategy"].Equals(true)) {
                 await _messageReceiver.CompleteAsync(entry.Id).AnyContext();
+            }
+
             Interlocked.Increment(ref _completedCount);
             entry.MarkCompleted();
             await OnCompletedAsync(entry).AnyContext();
@@ -228,8 +242,7 @@ namespace Foundatio.Queues {
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
-            var val = entry as QueueEntry<T>;
-            if (val.Data["push"].Equals(true))
+            if (entry is QueueEntry<T> val && val.Data["Pull-Strategy"].Equals(false))
                 await _queueClient.AbandonAsync(entry.Id).AnyContext();
             else
                 await _messageReceiver.AbandonAsync(entry.Id).AnyContext();

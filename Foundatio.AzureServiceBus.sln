@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
-VisualStudioVersion = 15.0.26430.16
+VisualStudioVersion = 15.0.27004.2002
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{70515E66-DAF8-4D18-8F8F-8A2934171AA9}"
 EndProject
@@ -18,13 +18,6 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Foundatio.AzureServiceBus.Tests", "test\Foundatio.AzureServiceBus.Tests\Foundatio.AzureServiceBus.Tests.csproj", "{9832E1F4-C826-4704-890A-00F330BC5913}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Foundatio.AzureServiceBus", "src\Foundatio.AzureServiceBus\Foundatio.AzureServiceBus.csproj", "{09FAD3AD-C078-4604-8BD1-CFB387882CF0}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Foundatio.SenderConsole", "samples\Foundatio.SenderConsole\Foundatio.SenderConsole.csproj", "{60DA7140-0453-426F-AB37-93F78D001338}"
-	ProjectSection(ProjectDependencies) = postProject
-		{09FAD3AD-C078-4604-8BD1-CFB387882CF0} = {09FAD3AD-C078-4604-8BD1-CFB387882CF0}
-	EndProjectSection
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Foundatio.ReceiverConsole", "samples\Foundatio.ReceiverConsole\Foundatio.ReceiverConsole.csproj", "{2257E266-9561-4215-9B8C-B229A251D1A3}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -60,35 +53,14 @@ Global
 		{09FAD3AD-C078-4604-8BD1-CFB387882CF0}.Release|x64.Build.0 = Release|Any CPU
 		{09FAD3AD-C078-4604-8BD1-CFB387882CF0}.Release|x86.ActiveCfg = Release|Any CPU
 		{09FAD3AD-C078-4604-8BD1-CFB387882CF0}.Release|x86.Build.0 = Release|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Debug|x64.Build.0 = Debug|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Debug|x86.Build.0 = Debug|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Release|Any CPU.Build.0 = Release|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Release|x64.ActiveCfg = Release|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Release|x64.Build.0 = Release|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Release|x86.ActiveCfg = Release|Any CPU
-		{60DA7140-0453-426F-AB37-93F78D001338}.Release|x86.Build.0 = Release|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Debug|x64.Build.0 = Debug|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Debug|x86.Build.0 = Debug|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Release|Any CPU.Build.0 = Release|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Release|x64.ActiveCfg = Release|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Release|x64.Build.0 = Release|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Release|x86.ActiveCfg = Release|Any CPU
-		{2257E266-9561-4215-9B8C-B229A251D1A3}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{9832E1F4-C826-4704-890A-00F330BC5913} = {70515E66-DAF8-4D18-8F8F-8A2934171AA9}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {00477E15-933C-4D1F-A3BB-CFDC5C38A003}
 	EndGlobalSection
 EndGlobal

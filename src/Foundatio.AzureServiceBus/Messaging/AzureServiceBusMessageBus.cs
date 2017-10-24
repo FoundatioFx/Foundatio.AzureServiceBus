@@ -24,11 +24,11 @@ namespace Foundatio.Messaging {
         private DateTime _tokenExpiresAtUtc = DateTime.MinValue;
 
         public AzureServiceBusMessageBus(AzureServiceBusMessageBusOptions options) : base(options) {
-            if (String.IsNullOrEmpty(options.ConnectionString))
-                throw new ArgumentException("ConnectionString is required.");
+            if (String.IsNullOrWhiteSpace(options.ConnectionString))
+                throw new ArgumentException($"{nameof(options.ConnectionString)} is required.");
 
-            if (String.IsNullOrEmpty(options.SubscriptionId))
-                throw new ArgumentException("SubscriptionId is required.");
+            if (String.IsNullOrWhiteSpace(options.SubscriptionId))
+                throw new ArgumentException($"{nameof(options.SubscriptionId)} is required.");
 
             _subscriptionName = _options.SubscriptionName ?? MessageBusId;
         }
