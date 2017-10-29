@@ -66,7 +66,7 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
         //        ClientSecret = clientSecret,
         //        SubscriptionId = subscriptionId,
         //        ResourceGroupName = resourceGroupName,
-        //        NameSpaceName =nameSpaceName,
+        //        NameSpaceName = nameSpaceName,
         //        LoggerFactory = Log
         //    });
         //}

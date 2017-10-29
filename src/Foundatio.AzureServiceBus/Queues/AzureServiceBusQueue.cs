@@ -158,9 +158,7 @@ namespace Foundatio.Queues {
 
                     try {
                         await handler(queueEntry, linkedCancellationToken).AnyContext();
-                        // Handler is registered with AutoComplete as TRUE by default.
-                        // todo: autoComplete parameter is not used because - See the Notes below.
-                        if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
+                        if (autoComplete && !queueEntry.IsAbandoned && !queueEntry.IsCompleted)
                             await queueEntry.CompleteAsync().AnyContext();
                     }
                     catch (Exception ex) {
@@ -172,10 +170,9 @@ namespace Foundatio.Queues {
                     }
                 }
                 // AutoComplete is true by default in MessageHandlerOptions. In the old library it used to be false.
-                // NOTE AND TEST MORE: if AutoComplete is set to false in the MessageHandlerOptions and we attempt to call
-                // CompleteAsync then exception is getting thrown.
-                // ex = {"The lock supplied is invalid. Either the lock expired, or the message has already been removed from the queue."}
-            }, new MessageHandlerOptions(OnExceptionAsync) { });
+                // We are not using default value because our library provides the option to the user to call CompleteAsync
+                // either during the handler or after the handler is done processing. 
+            }, new MessageHandlerOptions(OnExceptionAsync) {AutoComplete = false});
         }
 
         private Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
@@ -226,9 +223,13 @@ namespace Foundatio.Queues {
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
-            // For push strategy AutoComplete is true by default and no need to call ASB CompleteAsync.
-            if (entry is QueueEntry<T> val && val.Data["Pull-Strategy"].Equals(true)) {
-                await _messageReceiver.CompleteAsync(entry.Id).AnyContext();
+            if (entry is QueueEntry<T> val) {
+                if (val.Data["Pull-Strategy"].Equals(true)) {
+                    await _messageReceiver.CompleteAsync(entry.Id).AnyContext();
+                }
+                else {
+                    await _queueClient.CompleteAsync(entry.Id).AnyContext();
+                }
             }
 
             Interlocked.Increment(ref _completedCount);
