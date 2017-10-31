@@ -18,7 +18,7 @@ using Foundatio.AsyncEx;
 namespace Foundatio.Queues {
     public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<T>> where T : class {
         private readonly AsyncLock _lock = new AsyncLock();
-        private readonly MessageReceiver _messageReceiver;
+        private MessageReceiver _messageReceiver;
         private QueueClient _queueClient;
         private string _tokenValue = String.Empty;
         private DateTime _tokenExpiresAtUtc = DateTime.MinValue;
@@ -281,6 +281,7 @@ namespace Foundatio.Queues {
             if (_options.DuplicateDetectionHistoryTimeWindow.HasValue)
                 qd.DuplicateDetectionHistoryTimeWindow = _options.DuplicateDetectionHistoryTimeWindow.Value;
 
+            // todo : https://github.com/Azure/azure-service-bus/issues/88
             //if (_options.EnableBatchedOperations.HasValue)
             //    qd.EnableBatchedOperations = _options.EnableBatchedOperations.Value;
 
@@ -335,9 +336,36 @@ namespace Foundatio.Queues {
             return new ServiceBusManagementClient(creds) { SubscriptionId = _options.SubscriptionId };
         }
 
-        public override void Dispose() {
+        public override async void Dispose() {
             base.Dispose();
-            _queueClient?.CloseAsync();
+            await CloseQueueClientAsync();
+            await CloseMessageReceiverClientAsync();
+        }
+
+        private async Task CloseQueueClientAsync() {
+            if (_queueClient == null)
+                return;
+
+            using (await _lock.LockAsync().AnyContext()) {
+                if (_queueClient == null)
+                    return;
+
+                await _queueClient.CloseAsync().AnyContext();
+                _queueClient = null;
+            }
+        }
+
+        private async Task CloseMessageReceiverClientAsync() {
+            if (_messageReceiver == null)
+                return;
+
+            using (await _lock.LockAsync().AnyContext()) {
+                if (_messageReceiver == null)
+                    return;
+
+                await _messageReceiver.CloseAsync().AnyContext();
+                _messageReceiver = null;
+            }
         }
     }
 }

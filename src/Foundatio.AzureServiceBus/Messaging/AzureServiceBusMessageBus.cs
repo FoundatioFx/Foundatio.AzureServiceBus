@@ -253,10 +253,10 @@ namespace Foundatio.Messaging {
             return sd;
         }
 
-        public async override void Dispose() {
+        public override async void Dispose() {
             base.Dispose();
-            CloseTopicClientAsync();
-            CloseSubscriptionClientAsync();
+            await CloseTopicClientAsync();
+            await CloseSubscriptionClientAsync();
         }
 
         private async Task CloseTopicClientAsync() {
@@ -267,7 +267,7 @@ namespace Foundatio.Messaging {
                 if (_topicClient == null)
                     return;
 
-                await _topicClient?.CloseAsync();
+                await _topicClient.CloseAsync().AnyContext();
                 _topicClient = null;
             }
         }
@@ -280,7 +280,7 @@ namespace Foundatio.Messaging {
                 if (_subscriptionClient == null)
                     return;
 
-                await _subscriptionClient?.CloseAsync();
+                await _subscriptionClient.CloseAsync().AnyContext();
                 _subscriptionClient = null;
             }
         }
