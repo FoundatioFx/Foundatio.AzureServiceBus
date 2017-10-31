@@ -7,7 +7,7 @@
     <GeneratePackageOnBuild>False</GeneratePackageOnBuild>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Foundatio" Version="5.1.1521" />
+    <PackageReference Include="Foundatio" Version="5.1.1562" />
     <PackageReference Include="Microsoft.Azure.Management.ResourceManager" Version="1.6.0-preview" />
     <PackageReference Include="Microsoft.Azure.Management.ServiceBus" Version="1.0.2" />
     <PackageReference Include="Microsoft.Azure.ServiceBus" Version="2.0.0" />
