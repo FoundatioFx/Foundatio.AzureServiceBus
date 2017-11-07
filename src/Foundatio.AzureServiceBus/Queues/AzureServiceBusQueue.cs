@@ -4,16 +4,16 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Foundatio.Extensions;
-using Foundatio.Logging;
-using Foundatio.Serializer;
 using Foundatio.Utility;
 using Microsoft.Azure.ServiceBus;
 using Foundatio.AzureServiceBus.Utility;
 using Microsoft.Azure.Management.ServiceBus;
 using Microsoft.Azure.Management.ServiceBus.Models;
 using Microsoft.Azure.ServiceBus.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Rest;
 using Foundatio.AsyncEx;
+using Foundatio.Serializer;
 
 namespace Foundatio.Queues {
     public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<T>> where T : class {
@@ -49,7 +49,7 @@ namespace Foundatio.Queues {
 
             // todo: usermetadata not found in the new lib
             if (options.UserMetadata != null && options.UserMetadata.Length > 260)
-                throw new ArgumentException("Queue UserMetadata must be less than 1024 characters.");
+                throw new ArgumentException("Queue UserMetadata must be less than 260 characters.");
 
             _messageReceiver = new MessageReceiver(_options.ConnectionString, _options.Name);
         }
@@ -66,22 +66,22 @@ namespace Foundatio.Queues {
                 try {
                     var sbManagementClient = await GetManagementClient().AnyContext();
                     if (sbManagementClient != null) {
-                        await sbManagementClient.Queues.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription());
+                        await sbManagementClient.Queues.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription(), cancellationToken);
                     }
                 }
                 catch (ServiceBusTimeoutException e) {
-                    _logger.Error(e, "Errror while creating the queue");
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Errror while creating the queue");
                 }
                 catch (ErrorResponseException e) {
-                    _logger.Error(e, "Errror while creating the queue");
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Errror while creating the queue");
                 }
                 catch (Exception e) {
-                    _logger.Error(e, "Errror while creating the queue");
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Errror while creating the queue");
                 }
 
                 _queueClient = new QueueClient(_options.ConnectionString, _options.Name, ReceiveMode.PeekLock, _options.RetryPolicy);
                 sw.Stop();
-                _logger.Trace("Ensure queue exists took {0}ms.", sw.ElapsedMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Error)) _logger.LogTrace("Ensure queue exists took {ElapsedMilliseconds}", sw.ElapsedMilliseconds);
             }
         }
 
@@ -130,7 +130,7 @@ namespace Foundatio.Queues {
                 return null;
 
             Interlocked.Increment(ref _enqueuedCount);
-            var message = await _serializer.SerializeAsync(data).AnyContext();
+            var message = _serializer.Serialize(data);
             var brokeredMessage = new Message(message);
             brokeredMessage.MessageId = Guid.NewGuid().ToString();
             await _queueClient.SendAsync(brokeredMessage).AnyContext(); // TODO: See if there is a way to send a batch of messages.
@@ -147,9 +147,9 @@ namespace Foundatio.Queues {
             var linkedCancellationToken = GetLinkedDisposableCanncellationToken(cancellationToken);
 
             // TODO: How do you unsubscribe from this or bail out on queue disposed?
-            _logger.Trace("WorkerLoop Start {_options.Name}", _options.Name);
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("WorkerLoop Start {Name}", _options.Name);
             _queueClient.RegisterMessageHandler(async (msg, token) => {
-                _logger.Trace("WorkerLoop Signaled {_options.Name}", _options.Name);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("WorkerLoop Signaled {.Name}", _options.Name);
                 var queueEntry = await HandleDequeueAsync(msg).AnyContext();
                 if (queueEntry != null) {
                     var d = queueEntry as QueueEntry<T>;
@@ -163,7 +163,7 @@ namespace Foundatio.Queues {
                     }
                     catch (Exception ex) {
                         Interlocked.Increment(ref _workerErrorCount);
-                        _logger.Warn(ex, "Error sending work item to worker: {0}", ex.Message);
+                        if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning(ex, "Error sending work item to worker: {Message}", ex.Message);
 
                         if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
                             await queueEntry.AbandonAsync().AnyContext();
@@ -176,7 +176,7 @@ namespace Foundatio.Queues {
         }
 
         private Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
-            _logger.Warn(args.Exception, "Message handler encountered an exception.");
+            if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning(args.Exception, "Message handler encountered an exception.");
             return Task.CompletedTask;
         }
 
@@ -185,7 +185,7 @@ namespace Foundatio.Queues {
             Message msg;
             if (timeout <= TimeSpan.Zero) {
                 // todo: we will be passing min time and max timeout
-                _logger.Warn("Azure Service Bus throws Invalid argument exception. Calling ReceiveAsync with 1 secs timeout");
+                if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning("Azure Service Bus throws Invalid argument exception. Calling ReceiveAsync with 1 secs timeout");
                 msg = await _messageReceiver.ReceiveAsync(TimeSpan.FromSeconds(1)).AnyContext();
             }
             else {
@@ -202,24 +202,24 @@ namespace Foundatio.Queues {
         }
 
         protected override Task<IQueueEntry<T>> DequeueImplAsync(CancellationToken cancellationToken) {
-            _logger.Warn("Azure Service Bus does not support CancellationTokens - use TimeSpan overload instead. Using default 30 second timeout.");
+            if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning("Azure Service Bus does not support CancellationTokens - use TimeSpan overload instead. Using default 30 second timeout.");
             return DequeueAsync();
         }
 
         public override async Task RenewLockAsync(IQueueEntry<T> entry) {
-            _logger.Debug("Queue {0} renew lock item: {1}", _options.Name, entry.Id);
+            if (_logger.IsEnabled(LogLevel.Debug)) _logger.LogDebug("Queue {Name} renew lock item: {Id}", _options.Name, entry.Id);
 
             if (entry is QueueEntry<T> val && val.Data["Pull-Strategy"].Equals(true)) {
                 var newLockedUntilUtc = await _messageReceiver.RenewLockAsync(entry.Id).AnyContext();
-                _logger.Trace($"Renew lock done: { entry.Id} - {newLockedUntilUtc}");
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Renew lock done: {Id} - {newLockedUntilUtc}", entry.Id, newLockedUntilUtc);
             }
 
             await OnLockRenewedAsync(entry).AnyContext();
-            _logger.Trace("Renew lock done: {0}", entry.Id);
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Renew lock done: {Id}", entry.Id);
         }
 
         public override async Task CompleteAsync(IQueueEntry<T> entry) {
-            _logger.Debug("Queue {0} complete item: {1}", _options.Name, entry.Id);
+            if (_logger.IsEnabled(LogLevel.Debug)) _logger.LogDebug("Queue {Name} complete item: {Id}", _options.Name, entry.Id);
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
@@ -235,11 +235,11 @@ namespace Foundatio.Queues {
             Interlocked.Increment(ref _completedCount);
             entry.MarkCompleted();
             await OnCompletedAsync(entry).AnyContext();
-            _logger.Trace("Complete done: {0}", entry.Id);
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Complete done: {Id}", entry.Id);
         }
 
         public override async Task AbandonAsync(IQueueEntry<T> entry) {
-            _logger.Debug("Queue {_options.Name}:{QueueId} abandon item: {entryId}", _options.Name, QueueId, entry.Id);
+            if (_logger.IsEnabled(LogLevel.Debug)) _logger.LogDebug("Queue {Name}:{QueueId} abandon item: {Id}", _options.Name, QueueId, entry.Id);
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
@@ -250,14 +250,14 @@ namespace Foundatio.Queues {
             Interlocked.Increment(ref _abandonedCount);
             entry.MarkAbandoned();
             await OnAbandonedAsync(entry).AnyContext();
-            _logger.Trace("Abandon complete: {entryId}", entry.Id);
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Abandon complete: {Id}", entry.Id);
         }
 
         private async Task<IQueueEntry<T>> HandleDequeueAsync(Message brokeredMessage) {
             if (brokeredMessage == null)
                 return null;
 
-            var message = await _serializer.DeserializeAsync<T>(brokeredMessage.Body).AnyContext();
+            var message = _serializer.Deserialize<T>(brokeredMessage.Body);
 
             Interlocked.Increment(ref _dequeuedCount);
                 var entry = new QueueEntry<T>(brokeredMessage.SystemProperties.LockToken, message, this,

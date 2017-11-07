@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Threading.Tasks;
-using Foundatio.Logging;
 using Microsoft.IdentityModel.Clients.ActiveDirectory;
 namespace Foundatio.AzureServiceBus.Utility
 {

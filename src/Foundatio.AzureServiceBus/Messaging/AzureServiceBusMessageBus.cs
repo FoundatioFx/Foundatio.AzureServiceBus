@@ -4,7 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Foundatio.Extensions;
-using Foundatio.Logging;
+using Microsoft.Extensions.Logging;
 using Foundatio.Serializer;
 using Foundatio.Utility;
 using Microsoft.Azure.ServiceBus;
@@ -55,15 +55,13 @@ namespace Foundatio.Messaging {
 
                 // Look into message factory with multiple recievers so more than one connection is made and managed....
                 _subscriptionClient = new SubscriptionClient(_options.ConnectionString, _options.Topic, _subscriptionName, _options.ReceiveMode, _options.SubscriptionRetryPolicy);
-                
-                // See if this blows up?
-                
+
                 // Enable prefetch to speeden up the receive rate.
                 if (_options.PrefetchCount.HasValue)
                     _subscriptionClient.PrefetchCount = _options.PrefetchCount.Value;
 
                 // these are the default values of MessageHandlerOptions
-                int maxConcurrentCalls = 1;
+                var maxConcurrentCalls = 1;
                 bool autoComplete = true;
                 if (_options.MaxConcurrentCalls.HasValue)
                     maxConcurrentCalls = _options.MaxConcurrentCalls.Value;
@@ -73,13 +71,13 @@ namespace Foundatio.Messaging {
 
                 _subscriptionClient.RegisterMessageHandler(OnMessageAsync, new MessageHandlerOptions(OnExceptionAsync) { MaxConcurrentCalls = maxConcurrentCalls, AutoComplete = autoComplete });
                 sw.Stop();
-                _logger.Trace("Ensure topic subscription exists took {0}ms.", sw.ElapsedMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Ensure topic subscription exists took {ElapsedMilliseconds}", sw.ElapsedMilliseconds);
             }
         }
 
         // Use this Handler to look at the exceptions received on the MessagePump
         private Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
-            _logger.Warn(args.Exception, "Message handler encountered an exception.");
+            if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(args.Exception, "Message handler encountered an exception.");
             return Task.CompletedTask ;
         }
 
@@ -87,30 +85,20 @@ namespace Foundatio.Messaging {
             if (_subscribers.IsEmpty)
                 return;
 
-            _logger.Trace($"Received message: messageId:{ brokeredMessage.MessageId} SequenceNumber:{brokeredMessage.SystemProperties.SequenceNumber}");
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Received message: {MessageId} :{SequenceNumber}", brokeredMessage.MessageId, brokeredMessage.SystemProperties.SequenceNumber);
             MessageBusData message;
             try {
-                message = await _serializer.DeserializeAsync<MessageBusData>(brokeredMessage.Body).AnyContext();
+                message = _serializer.Deserialize<MessageBusData>(brokeredMessage.Body);
             } catch (Exception ex) {
-                _logger.Warn(ex, "OnMessageAsync({0}) Error deserializing messsage: {1}", brokeredMessage.MessageId, ex.Message);
+                if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning(ex, "OnMessageAsync({MessageId}) Error deserializing messsage: {Message}", brokeredMessage.MessageId, ex.Message);
                 // A lock token can be found in LockToken, only when ReceiveMode is set to PeekLock
                 await _subscriptionClient.DeadLetterAsync(brokeredMessage.SystemProperties.LockToken).AnyContext();
                 return;
             }
 
-            // NOTES : Please read carefully.
-            // There is no need to call CompleteAsync if the receive mode is set to "ReceiveAndDelete".
-            // If the ReceiveMode is set to PeekLock and AutoComplete is true then on return of the OnMessageAsync, azure libary takes care of calling CompleteAsync.
-            // Please use the below code on the client side only if you intend to pass ReceiveMode as PeekLock and AutoComplete as False.
-            // Again, By default the Recieve mode is peek lock and autocomplete is also true. In that case Azure library takes care of completing the message for you
-            // as soon as the OnMessage is returned. This holds true for 
-            // ReceiveAndDelete option as well.If you have ReceiveMode set ReceiveDelete then there is never a reason to call Message.Complete as the message is
-            // already removed from the queue.
-            // Caution : This below setting is not recommended because the user may forgot to call CompleteAsync, and then a message would keep appearing,
-            // until it is eventually dead-lettered
-            //if (_options.ReceiveMode == ReceiveMode.PeekLock && _options.AutoComplete == false) {
-            //    await _subscriptionClient.CompleteAsync(brokeredMessage.SystemProperties.LockToken).AnyContext();
-            //}
+            if (_options.ReceiveMode == ReceiveMode.PeekLock && _options.AutoComplete == false) {
+                await _subscriptionClient.CompleteAsync(brokeredMessage.SystemProperties.LockToken).AnyContext();
+            }
             await SendMessageToSubscribersAsync(message, _serializer).AnyContext();
         }
 
@@ -126,42 +114,45 @@ namespace Foundatio.Messaging {
                 try {
                     var sbManagementClient = await GetManagementClient().AnyContext();
                     if (sbManagementClient != null) {
-                        await sbManagementClient.Topics.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Topic, CreateTopicDescription()).AnyContext();
+                        await sbManagementClient.Topics.CreateOrUpdateAsync(_options.ResourceGroupName,
+                                _options.NameSpaceName, _options.Topic, CreateTopicDescription(), cancellationToken)
+                            .AnyContext();
 
                     }
-                } catch (ErrorResponseException e) {
-                    _logger.Error(e, "Error creating Topic Entity");
-                    throw e;
+                }
+                catch (ErrorResponseException e) {
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Error creating Topic Entity");
+                    throw;
                 }
 
                 _topicClient = new TopicClient(_options.ConnectionString, _options.Topic);
                 sw.Stop();
-                _logger.Trace("Ensure topic exists took {0}ms.", sw.ElapsedMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Ensure topic exists took {ElapsedMilliseconds}.", sw.ElapsedMilliseconds);
             }
         }
 
         protected override async Task PublishImplAsync(Type messageType, object message, TimeSpan? delay, CancellationToken cancellationToken) {
-            var data = await _serializer.SerializeAsync(new MessageBusData {
+            var data = _serializer.Serialize(new MessageBusData {
                 Type = messageType.AssemblyQualifiedName,
-                Data = await _serializer.SerializeToStringAsync(message).AnyContext()
-            }).AnyContext();
+                Data = _serializer.SerializeToString(message)
+            });
 
-            
-            var brokeredMessage = new Message(data);
-            brokeredMessage.MessageId = Guid.NewGuid().ToString();
+            var brokeredMessage = new Message(data) {
+                MessageId = Guid.NewGuid().ToString()
+            };
 
             if (delay.HasValue && delay.Value > TimeSpan.Zero) {
-                _logger.Trace("Schedule delayed message: {messageType} ({delay}ms)", messageType.FullName, delay.Value.TotalMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Schedule delayed message: {FullName} {TotalMilliseconds}", messageType.FullName, delay.Value.TotalMilliseconds);
                 brokeredMessage.ScheduledEnqueueTimeUtc = SystemClock.UtcNow.Add(delay.Value);
             } else {
-                _logger.Trace("Message Publish: {messageType}", messageType.FullName);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Message Publish: {FullName}", messageType.FullName);
             }
 
             try {
                 await _topicClient.SendAsync(brokeredMessage).AnyContext();
             }
             catch (MessagingEntityNotFoundException e) {
-                _logger.Error(e, "Make sure Entity is created");
+                if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Make sure Entity is created");
             }
         }
 

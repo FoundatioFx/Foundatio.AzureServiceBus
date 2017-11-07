@@ -2,14 +2,13 @@
 using System.Diagnostics;
 using Foundatio.Queues;
 using Foundatio.Tests.Queue;
-using Foundatio.Tests.Utility;
 using Xunit;
 using System.Threading.Tasks;
-using Foundatio.AsyncEx;
-using Foundatio.Logging;
+using Foundatio.Tests.Utility;
 using Foundatio.Utility;
 using Microsoft.Azure.ServiceBus;
 using Xunit.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace Foundatio.AzureServiceBus.Tests.Queue {
     public class AzureServiceBusQueueTests : QueueTestBase {
@@ -19,57 +18,57 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
             Log.SetLogLevel<AzureServiceBusQueue<SimpleWorkItem>>(LogLevel.Trace);
         }
 
-        //protected override IQueue<SimpleWorkItem> GetQueue(int retries = 0, TimeSpan? workItemTimeout = null, TimeSpan? retryDelay = null, int deadLetterMaxItems = 100, bool runQueueMaintenance = true) {
-        //    string connectionString = Configuration.GetSection("AzureServiceBusConnectionString").Value;
-        //    if (String.IsNullOrEmpty(connectionString))
-        //        return null;
-        //    string clientId = Configuration.GetSection("ClientId").Value;
-        //    if (String.IsNullOrEmpty(clientId))
-        //        return null;
-        //    string tenantId = Configuration.GetSection("TenantId").Value;
-        //    if (String.IsNullOrEmpty(tenantId))
-        //        return null;
-        //    string clientSecret = Configuration.GetSection("ClientSecret").Value;
-        //    if (String.IsNullOrEmpty(clientSecret))
-        //        return null;
-        //    string subscriptionId = Configuration.GetSection("SubscriptionId").Value;
-        //    if (String.IsNullOrEmpty(subscriptionId))
-        //        return null;
-        //    string resourceGroupName = Configuration.GetSection("ResourceGroupName").Value;
-        //    if (String.IsNullOrEmpty(resourceGroupName))
-        //        return null;
-        //    string nameSpaceName = Configuration.GetSection("NameSpaceName").Value;
-        //    if (String.IsNullOrEmpty(nameSpaceName))
-        //        return null;
+        protected override IQueue<SimpleWorkItem> GetQueue(int retries = 0, TimeSpan? workItemTimeout = null, TimeSpan? retryDelay = null, int deadLetterMaxItems = 100, bool runQueueMaintenance = true) {
+            string connectionString = Configuration.GetSection("AzureServiceBusConnectionString").Value;
+            if (String.IsNullOrEmpty(connectionString))
+                return null;
+            string clientId = Configuration.GetSection("ClientId").Value;
+            if (String.IsNullOrEmpty(clientId))
+                return null;
+            string tenantId = Configuration.GetSection("TenantId").Value;
+            if (String.IsNullOrEmpty(tenantId))
+                return null;
+            string clientSecret = Configuration.GetSection("ClientSecret").Value;
+            if (String.IsNullOrEmpty(clientSecret))
+                return null;
+            string subscriptionId = Configuration.GetSection("SubscriptionId").Value;
+            if (String.IsNullOrEmpty(subscriptionId))
+                return null;
+            string resourceGroupName = Configuration.GetSection("ResourceGroupName").Value;
+            if (String.IsNullOrEmpty(resourceGroupName))
+                return null;
+            string nameSpaceName = Configuration.GetSection("NameSpaceName").Value;
+            if (String.IsNullOrEmpty(nameSpaceName))
+                return null;
 
-        //    var retryPolicy = retryDelay.GetValueOrDefault() > TimeSpan.Zero
-        //        ? new RetryExponential(retryDelay.GetValueOrDefault(),
-        //        retryDelay.GetValueOrDefault() + retryDelay.GetValueOrDefault(), retries + 1)
-        //        : RetryPolicy.Default;
+            var retryPolicy = retryDelay.GetValueOrDefault() > TimeSpan.Zero
+                ? new RetryExponential(retryDelay.GetValueOrDefault(),
+                retryDelay.GetValueOrDefault() + retryDelay.GetValueOrDefault(), retries + 1)
+                : RetryPolicy.Default;
 
-        //    _logger.Debug("Queue Id: {queueId}", _queueName);
-        //    return new AzureServiceBusQueue<SimpleWorkItem>(new AzureServiceBusQueueOptions<SimpleWorkItem> {
-        //        ConnectionString = connectionString,
-        //        Name = _queueName,
-        //        AutoDeleteOnIdle = TimeSpan.FromMinutes(5),
-        //        EnableBatchedOperations = true,
-        //        EnableExpress = true,
-        //        EnablePartitioning = true,
-        //        SupportOrdering = false,
-        //        RequiresDuplicateDetection = false,
-        //        RequiresSession = false,
-        //        Retries = retries,
-        //        RetryPolicy = retryPolicy,
-        //        WorkItemTimeout = workItemTimeout.GetValueOrDefault(TimeSpan.FromMinutes(5)),
-        //        ClientId = clientId,
-        //        TenantId = tenantId,
-        //        ClientSecret = clientSecret,
-        //        SubscriptionId = subscriptionId,
-        //        ResourceGroupName = resourceGroupName,
-        //        NameSpaceName = nameSpaceName,
-        //        LoggerFactory = Log
-        //    });
-        //}
+            if (_logger.IsEnabled(LogLevel.Debug)) _logger.LogDebug("Queue Id: {_queueName}", _queueName);
+            return new AzureServiceBusQueue<SimpleWorkItem>(new AzureServiceBusQueueOptions<SimpleWorkItem> {
+                ConnectionString = connectionString,
+                Name = _queueName,
+                AutoDeleteOnIdle = TimeSpan.FromMinutes(5),
+                EnableBatchedOperations = true,
+                EnableExpress = true,
+                EnablePartitioning = true,
+                SupportOrdering = false,
+                RequiresDuplicateDetection = false,
+                RequiresSession = false,
+                Retries = retries,
+                RetryPolicy = retryPolicy,
+                WorkItemTimeout = workItemTimeout.GetValueOrDefault(TimeSpan.FromMinutes(5)),
+                ClientId = clientId,
+                TenantId = tenantId,
+                ClientSecret = clientSecret,
+                SubscriptionId = subscriptionId,
+                ResourceGroupName = resourceGroupName,
+                NameSpaceName = nameSpaceName,
+                LoggerFactory = Log
+            });
+        }
 
         protected override Task CleanupQueueAsync(IQueue<SimpleWorkItem> queue) {
             // Don't delete the queue, it's super expensive and will be cleaned up later.
@@ -92,7 +91,8 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
             return base.CanQueueAndDequeueMultipleWorkItemsAsync();
         }
 
-        private async Task WillWaitItemAsync() {
+        [Fact]
+        public override async Task WillWaitForItemAsync() {
             var queue = GetQueue();
             if (queue == null)
                 return;
@@ -103,7 +103,7 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
                 var sw = Stopwatch.StartNew();
                 var workItem = await queue.DequeueAsync(TimeSpan.FromMilliseconds(100));
                 sw.Stop();
-                _logger.Trace("Time {0}", sw.Elapsed);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Time {Elapsed}", sw.Elapsed);
                 Assert.Null(workItem);
                 Assert.True(sw.Elapsed > TimeSpan.FromMilliseconds(100));
 
@@ -117,7 +117,7 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
                 sw.Restart();
                 workItem = await queue.DequeueAsync(TimeSpan.FromSeconds(1));
                 sw.Stop();
-                _logger.Trace("Time {0}", sw.Elapsed);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Time {Elapsed}", sw.Elapsed);
                 // This is varying alot. Sometimes its greater and sometimes its less.
                 //Assert.True(sw.Elapsed > TimeSpan.FromMilliseconds(400));
                 Assert.NotNull(workItem);
@@ -127,11 +127,6 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
             finally {
                 await CleanupQueueAsync(queue);
             }
-        }
-
-        [Fact]
-        public override Task WillWaitForItemAsync() {
-            return WillWaitItemAsync();
         }
 
         [Fact]
@@ -154,7 +149,17 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
             return base.WorkItemsWillTimeoutAsync();
         }
 
-        private async Task DontWaitForItemAsync() {
+        /// <summary>
+        /// If run with the base class the result is always:
+        /// Range:  (0 - 100)
+        /// Actual: 1000.6876
+        /// Because base class is using TimeSpan.Zero, the implementation of DequeueAsync changes it to 1 sec.
+        /// 1 sec wait for the wait of the item not in the queue is too long for the test case, hence overriding this method so
+        /// that DequeueAsync can return with quickly with short timeout.
+        /// </summary>
+        /// <returns></returns>
+        [Fact]
+        public override async Task WillNotWaitForItemAsync() {
             var queue = GetQueue();
             if (queue == null)
                 return;
@@ -165,18 +170,13 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
                 var sw = Stopwatch.StartNew();
                 var workItem = await queue.DequeueAsync(TimeSpan.FromMilliseconds(100));
                 sw.Stop();
-                _logger.Trace("Time {0}", sw.Elapsed);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Time {Elapsed}", sw.Elapsed);
                 Assert.Null(workItem);
                 Assert.InRange(sw.Elapsed.TotalMilliseconds, 0, 30000);
             }
             finally {
                 await CleanupQueueAsync(queue);
             }
-        }
-
-        [Fact]
-        public override Task WillNotWaitForItemAsync() {
-            return DontWaitForItemAsync();
         }
 
         [Fact]
@@ -219,9 +219,16 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
             return base.CanRunWorkItemWithMetricsAsync();
         }
 
-        private async Task RenewLockAsync() {
-            // Need large value to reproduce this test
-            var workItemTimeout = TimeSpan.FromSeconds(30);
+        /// <summary>
+        /// This method needs to be overriden because it requires higher LockDuration time 
+        /// for the RenewLock. Basically lock for any message needs to be renewed within the time 
+        /// period of lockDuration, else MessageLockException gets thrown.
+        /// </summary>
+        /// <returns></returns>
+        [Fact]
+        public override async Task CanRenewLockAsync() {
+            // Need large value of the lockDuration to reproduce this test
+            var workItemTimeout = TimeSpan.FromSeconds(15);
 
             var queue = GetQueue(retryDelay: TimeSpan.Zero, workItemTimeout: workItemTimeout);
             if (queue == null)
@@ -230,32 +237,30 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
             await queue.EnqueueAsync(new SimpleWorkItem {
                 Data = "Hello"
             });
-            var entry = await queue.DequeueAsync(TimeSpan.Zero);
+            var entry = await queue.DequeueAsync(TimeSpan.FromMilliseconds(500));
 
             if (entry is QueueEntry<SimpleWorkItem> val) {
-                var firstLockedUntilUtcTime = (DateTime) val.Data.GetValueOrDefault("LockedUntilUtc");
-                _logger.Trace(() => $"MessageLockedUntil: {firstLockedUntilUtcTime}");
+                var firstLockedUntilUtcTime = (DateTime)val.Data.GetValueOrDefault("LockedUntilUtc");
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("MessageLockedUntil: {firstLockedUntilUtcTime}", firstLockedUntilUtcTime);
             }
 
             Assert.NotNull(entry);
             Assert.Equal("Hello", entry.Value.Data);
 
-            _logger.Trace(() => $"Waiting for 5 secs before renewing lock");
-            await Task.Delay(TimeSpan.FromSeconds(5));
-            _logger.Trace(() => $"Renewing lock");
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Waiting for 5 secs before renewing lock");
+            // My observation: If the time to process the item takes longer than the LockDuration,
+            // then trying to call RenewLockAsync will give you MessageLockLostException - The lock supplied is invalid. Either the lock expired, or the message has already been removed from the queue. 
+            // So this test case is keeping the processing time less than the LockDuration of 30 seconds.
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Renewing lock");
             await entry.RenewLockAsync();
 
             //// We shouldn't get another item here if RenewLock works.
-            _logger.Trace(() => $"Attempting to dequeue item that shouldn't exist");
-            var nullWorkItem = await queue.DequeueAsync(TimeSpan.FromSeconds(2));
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Attempting to dequeue item that shouldn't exist");
+            var nullWorkItem = await queue.DequeueAsync(TimeSpan.FromMilliseconds(500));
             Assert.Null(nullWorkItem);
             await entry.CompleteAsync();
             Assert.Equal(0, (await queue.GetQueueStatsAsync()).Queued);
-        }
-
-        [Fact]
-        public override Task CanRenewLockAsync() {
-            return RenewLockAsync();
         }
 
         [Fact]
