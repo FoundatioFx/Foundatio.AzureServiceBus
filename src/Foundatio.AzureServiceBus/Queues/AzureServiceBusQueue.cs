@@ -81,7 +81,7 @@ namespace Foundatio.Queues {
 
                 _queueClient = new QueueClient(_options.ConnectionString, _options.Name, ReceiveMode.PeekLock, _options.RetryPolicy);
                 sw.Stop();
-                if (_logger.IsEnabled(LogLevel.Error)) _logger.LogTrace("Ensure queue exists took {ElapsedMilliseconds}", sw.ElapsedMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Error)) _logger.LogTrace("Ensure queue exists took {Duration:g}", sw.ElapsedMilliseconds);
             }
         }
 
@@ -149,7 +149,7 @@ namespace Foundatio.Queues {
             // TODO: How do you unsubscribe from this or bail out on queue disposed?
             if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("WorkerLoop Start {Name}", _options.Name);
             _queueClient.RegisterMessageHandler(async (msg, token) => {
-                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("WorkerLoop Signaled {.Name}", _options.Name);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("WorkerLoop Signaled {Name}", _options.Name);
                 var queueEntry = await HandleDequeueAsync(msg).AnyContext();
                 if (queueEntry != null) {
                     var d = queueEntry as QueueEntry<T>;

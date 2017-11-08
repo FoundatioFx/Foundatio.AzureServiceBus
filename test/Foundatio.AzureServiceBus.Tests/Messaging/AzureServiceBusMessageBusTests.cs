@@ -135,7 +135,7 @@ namespace Foundatio.AzureServiceBus.Tests.Messaging {
                 await countdown.WaitAsync(TimeSpan.FromSeconds(50));
                 sw.Stop();
 
-                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace($"Processed {2 - countdown.CurrentCount} in {sw.ElapsedMilliseconds}ms");
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Processed {TestCurrentCount} in {Duration:g}", 2 - countdown.CurrentCount, sw.ElapsedMilliseconds);
                 Assert.Equal(0, countdown.CurrentCount);
             }
             finally {

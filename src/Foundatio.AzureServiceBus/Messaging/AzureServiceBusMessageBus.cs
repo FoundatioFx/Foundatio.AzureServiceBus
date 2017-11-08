@@ -71,7 +71,7 @@ namespace Foundatio.Messaging {
 
                 _subscriptionClient.RegisterMessageHandler(OnMessageAsync, new MessageHandlerOptions(OnExceptionAsync) { MaxConcurrentCalls = maxConcurrentCalls, AutoComplete = autoComplete });
                 sw.Stop();
-                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Ensure topic subscription exists took {ElapsedMilliseconds}", sw.ElapsedMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Ensure topic subscription exists took {Duration:g}", sw.ElapsedMilliseconds);
             }
         }
 
@@ -127,7 +127,7 @@ namespace Foundatio.Messaging {
 
                 _topicClient = new TopicClient(_options.ConnectionString, _options.Topic);
                 sw.Stop();
-                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Ensure topic exists took {ElapsedMilliseconds}.", sw.ElapsedMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Ensure topic exists took {Duration:g}.", sw.ElapsedMilliseconds);
             }
         }
 

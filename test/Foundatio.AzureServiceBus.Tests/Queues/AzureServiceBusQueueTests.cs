@@ -103,7 +103,7 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
                 var sw = Stopwatch.StartNew();
                 var workItem = await queue.DequeueAsync(TimeSpan.FromMilliseconds(100));
                 sw.Stop();
-                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Time {Elapsed}", sw.Elapsed);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Time {Duration:g}", sw.Elapsed);
                 Assert.Null(workItem);
                 Assert.True(sw.Elapsed > TimeSpan.FromMilliseconds(100));
 
@@ -117,7 +117,7 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
                 sw.Restart();
                 workItem = await queue.DequeueAsync(TimeSpan.FromSeconds(1));
                 sw.Stop();
-                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Time {Elapsed}", sw.Elapsed);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Time {Duration:g}", sw.Elapsed);
                 // This is varying alot. Sometimes its greater and sometimes its less.
                 //Assert.True(sw.Elapsed > TimeSpan.FromMilliseconds(400));
                 Assert.NotNull(workItem);
@@ -170,7 +170,7 @@ namespace Foundatio.AzureServiceBus.Tests.Queue {
                 var sw = Stopwatch.StartNew();
                 var workItem = await queue.DequeueAsync(TimeSpan.FromMilliseconds(100));
                 sw.Stop();
-                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Time {Elapsed}", sw.Elapsed);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Time {Duration:g}", sw.Elapsed);
                 Assert.Null(workItem);
                 Assert.InRange(sw.Elapsed.TotalMilliseconds, 0, 30000);
             }
