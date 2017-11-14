@@ -1,46 +1,39 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Foundatio.Extensions;
-using Foundatio.Logging;
-using Foundatio.Serializer;
 using Foundatio.Utility;
-using Microsoft.ServiceBus;
-using Microsoft.ServiceBus.Messaging;
-using Nito.AsyncEx;
+using Microsoft.Azure.ServiceBus;
+using Foundatio.AzureServiceBus.Utility;
+using Microsoft.Azure.Management.ServiceBus;
+using Microsoft.Azure.Management.ServiceBus.Models;
+using Microsoft.Azure.ServiceBus.Core;
+using Microsoft.Extensions.Logging;
+using Microsoft.Rest;
+using Foundatio.AsyncEx;
+using Foundatio.Serializer;
 
 namespace Foundatio.Queues {
     public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<T>> where T : class {
         private readonly AsyncLock _lock = new AsyncLock();
-        private readonly NamespaceManager _namespaceManager;
+        private MessageReceiver _messageReceiver;
         private QueueClient _queueClient;
+        private string _tokenValue = String.Empty;
+        private DateTime _tokenExpiresAtUtc = DateTime.MinValue;
         private long _enqueuedCount;
         private long _dequeuedCount;
         private long _completedCount;
         private long _abandonedCount;
         private long _workerErrorCount;
 
-        [Obsolete("Use the options overload")]
-        public AzureServiceBusQueue(string connectionString, string queueName = null, int retries = 2, TimeSpan? workItemTimeout = null, RetryPolicy retryPolicy = null, ISerializer serializer = null, IEnumerable<IQueueBehavior<T>> behaviors = null, ILoggerFactory loggerFactory = null, TimeSpan? autoDeleteOnIdle = null, TimeSpan? defaultMessageTimeToLive = null)
-            : this(new AzureServiceBusQueueOptions<T>() {
-                ConnectionString = connectionString,
-                Name = queueName,
-                Retries = retries,
-                RetryPolicy = retryPolicy,
-                AutoDeleteOnIdle = autoDeleteOnIdle.GetValueOrDefault(TimeSpan.MaxValue),
-                DefaultMessageTimeToLive = defaultMessageTimeToLive.GetValueOrDefault(TimeSpan.MaxValue),
-                WorkItemTimeout = workItemTimeout.GetValueOrDefault(TimeSpan.FromMinutes(5)),
-                Behaviors = behaviors,
-                Serializer = serializer,
-                LoggerFactory = loggerFactory
-            }) { }
-
         public AzureServiceBusQueue(AzureServiceBusQueueOptions<T> options) : base(options) {
-            if (String.IsNullOrEmpty(options.ConnectionString))
-                throw new ArgumentException("ConnectionString is required.");
+            if (String.IsNullOrWhiteSpace(options.ConnectionString))
+                throw new ArgumentException($"{nameof(options.ConnectionString)} is required.");
+
+            if (String.IsNullOrWhiteSpace(options.SubscriptionId))
+                throw new ArgumentException($"{nameof(options.SubscriptionId)} is required.");
 
             if (options.Name.Length > 260)
                 throw new ArgumentException("Queue name must be set and be less than 260 characters.");
@@ -54,10 +47,11 @@ namespace Foundatio.Queues {
             if (options.DuplicateDetectionHistoryTimeWindow.HasValue && (options.DuplicateDetectionHistoryTimeWindow < TimeSpan.FromSeconds(20.0) || options.DuplicateDetectionHistoryTimeWindow > TimeSpan.FromDays(7.0)))
                 throw new ArgumentException("The minimum DuplicateDetectionHistoryTimeWindow duration is 20 seconds and maximum is 7 days.");
 
+            // todo: usermetadata not found in the new lib
             if (options.UserMetadata != null && options.UserMetadata.Length > 260)
-                throw new ArgumentException("Queue UserMetadata must be less than 1024 characters.");
+                throw new ArgumentException("Queue UserMetadata must be less than 260 characters.");
 
-            _namespaceManager = NamespaceManager.CreateFromConnectionString(options.ConnectionString);
+            _messageReceiver = new MessageReceiver(_options.ConnectionString, _options.Name);
         }
 
         protected override async Task EnsureQueueCreatedAsync(CancellationToken cancellationToken = new CancellationToken()) {
@@ -70,21 +64,34 @@ namespace Foundatio.Queues {
 
                 var sw = Stopwatch.StartNew();
                 try {
-                    await _namespaceManager.CreateQueueAsync(CreateQueueDescription()).AnyContext();
-                } catch (MessagingEntityAlreadyExistsException) { }
+                    var sbManagementClient = await GetManagementClient().AnyContext();
+                    if (sbManagementClient != null) {
+                        await sbManagementClient.Queues.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name, CreateQueueDescription(), cancellationToken);
+                    }
+                }
+                catch (ServiceBusTimeoutException e) {
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Errror while creating the queue");
+                }
+                catch (ErrorResponseException e) {
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Errror while creating the queue");
+                }
+                catch (Exception e) {
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Errror while creating the queue");
+                }
 
-                _queueClient = QueueClient.CreateFromConnectionString(_options.ConnectionString, _options.Name);
-                if (_options.RetryPolicy != null)
-                    _queueClient.RetryPolicy = _options.RetryPolicy;
-
+                _queueClient = new QueueClient(_options.ConnectionString, _options.Name, ReceiveMode.PeekLock, _options.RetryPolicy);
                 sw.Stop();
-                _logger.Trace("Ensure queue exists took {0}ms.", sw.ElapsedMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Error)) _logger.LogTrace("Ensure queue exists took {Duration:g}", sw.ElapsedMilliseconds);
             }
         }
 
         public override async Task DeleteQueueAsync() {
-            if (await _namespaceManager.QueueExistsAsync(_options.Name).AnyContext())
-                await _namespaceManager.DeleteQueueAsync(_options.Name).AnyContext();
+            var sbManagementClient = await GetManagementClient().AnyContext();
+            if (sbManagementClient == null) {
+                return;
+            }
+
+            await sbManagementClient.Queues.DeleteAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name);
 
             _queueClient = null;
             _enqueuedCount = 0;
@@ -95,11 +102,16 @@ namespace Foundatio.Queues {
         }
 
         protected override async Task<QueueStats> GetQueueStatsImplAsync() {
-            var q = await _namespaceManager.GetQueueAsync(_options.Name).AnyContext();
+
+            var sbManagementClient = await GetManagementClient().AnyContext();
+            if (sbManagementClient == null) {
+                return null;
+            }
+            var q = await sbManagementClient.Queues.GetAsync(_options.ResourceGroupName, _options.NameSpaceName, _options.Name).AnyContext();
             return new QueueStats {
-                Queued = q.MessageCount,
+                Queued = q.MessageCount ?? default(long),
                 Working = 0,
-                Deadletter = q.MessageCountDetails.DeadLetterMessageCount,
+                Deadletter = q.CountDetails.DeadLetterMessageCount ?? default(long),
                 Enqueued = _enqueuedCount,
                 Dequeued = _dequeuedCount,
                 Completed = _completedCount,
@@ -118,10 +130,10 @@ namespace Foundatio.Queues {
                 return null;
 
             Interlocked.Increment(ref _enqueuedCount);
-            var message = await _serializer.SerializeToStreamAsync(data).AnyContext();
-            var brokeredMessage = new BrokeredMessage(message, true);
+            var message = _serializer.Serialize(data);
+            var brokeredMessage = new Message(message);
+            brokeredMessage.MessageId = Guid.NewGuid().ToString();
             await _queueClient.SendAsync(brokeredMessage).AnyContext(); // TODO: See if there is a way to send a batch of messages.
-
             var entry = new QueueEntry<T>(brokeredMessage.MessageId, data, this, SystemClock.UtcNow, 0);
             await OnEnqueuedAsync(entry).AnyContext();
 
@@ -135,81 +147,127 @@ namespace Foundatio.Queues {
             var linkedCancellationToken = GetLinkedDisposableCanncellationToken(cancellationToken);
 
             // TODO: How do you unsubscribe from this or bail out on queue disposed?
-            _logger.Trace("WorkerLoop Start {_options.Name}", _options.Name);
-            _queueClient.OnMessageAsync(async msg => {
-                _logger.Trace("WorkerLoop Signaled {_options.Name}", _options.Name);
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("WorkerLoop Start {Name}", _options.Name);
+            _queueClient.RegisterMessageHandler(async (msg, token) => {
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("WorkerLoop Signaled {Name}", _options.Name);
                 var queueEntry = await HandleDequeueAsync(msg).AnyContext();
+                if (queueEntry != null) {
+                    var d = queueEntry as QueueEntry<T>;
+                    d?.Data.Add("Pull-Strategy", false);
+                    d?.Data.Add("LockedUntilUtc", msg.SystemProperties.LockedUntilUtc);
 
-                try {
-                    await handler(queueEntry, linkedCancellationToken).AnyContext();
-                    if (autoComplete && !queueEntry.IsAbandoned && !queueEntry.IsCompleted)
-                        await queueEntry.CompleteAsync().AnyContext();
-                } catch (Exception ex) {
-                    Interlocked.Increment(ref _workerErrorCount);
-                    _logger.Warn(ex, "Error sending work item to worker: {0}", ex.Message);
+                    try {
+                        await handler(queueEntry, linkedCancellationToken).AnyContext();
+                        if (autoComplete && !queueEntry.IsAbandoned && !queueEntry.IsCompleted)
+                            await queueEntry.CompleteAsync().AnyContext();
+                    }
+                    catch (Exception ex) {
+                        Interlocked.Increment(ref _workerErrorCount);
+                        if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning(ex, "Error sending work item to worker: {Message}", ex.Message);
 
-                    if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
-                        await queueEntry.AbandonAsync().AnyContext();
+                        if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
+                            await queueEntry.AbandonAsync().AnyContext();
+                    }
                 }
-            }, new OnMessageOptions { AutoComplete = false });
+                // AutoComplete is true by default in MessageHandlerOptions. In the old library it used to be false.
+                // We are not using default value because our library provides the option to the user to call CompleteAsync
+                // either during the handler or after the handler is done processing. 
+            }, new MessageHandlerOptions(OnExceptionAsync) {AutoComplete = false});
+        }
+
+        private Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
+            if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning(args.Exception, "Message handler encountered an exception.");
+            return Task.CompletedTask;
         }
 
         public override async Task<IQueueEntry<T>> DequeueAsync(TimeSpan? timeout = null) {
             await EnsureQueueCreatedAsync().AnyContext();
-            using (var msg = await _queueClient.ReceiveAsync(timeout.GetValueOrDefault(TimeSpan.FromSeconds(30))).AnyContext()) {
-                return await HandleDequeueAsync(msg).AnyContext();
+            Message msg;
+            if (timeout <= TimeSpan.Zero) {
+                // todo: we will be passing min time and max timeout
+                if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning("Azure Service Bus throws Invalid argument exception. Calling ReceiveAsync with 1 secs timeout");
+                msg = await _messageReceiver.ReceiveAsync(TimeSpan.FromSeconds(1)).AnyContext();
             }
+            else {
+                msg = await _messageReceiver.ReceiveAsync(timeout.GetValueOrDefault(TimeSpan.FromSeconds(30)))
+                    .AnyContext();
+            }
+            var queueEntry = await HandleDequeueAsync(msg).AnyContext();
+            if (queueEntry != null) {
+                var d = queueEntry as QueueEntry<T>;
+                d?.Data.Add("Pull-Strategy", true);
+                d?.Data.Add("LockedUntilUtc", msg.SystemProperties.LockedUntilUtc);
+            }
+            return queueEntry;
         }
 
         protected override Task<IQueueEntry<T>> DequeueImplAsync(CancellationToken cancellationToken) {
-            _logger.Warn("Azure Service Bus does not support CancellationTokens - use TimeSpan overload instead. Using default 30 second timeout.");
+            if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning("Azure Service Bus does not support CancellationTokens - use TimeSpan overload instead. Using default 30 second timeout.");
             return DequeueAsync();
         }
 
         public override async Task RenewLockAsync(IQueueEntry<T> entry) {
-            _logger.Debug("Queue {0} renew lock item: {1}", _options.Name, entry.Id);
-            await _queueClient.RenewMessageLockAsync(new Guid(entry.Id)).AnyContext();
+            if (_logger.IsEnabled(LogLevel.Debug)) _logger.LogDebug("Queue {Name} renew lock item: {Id}", _options.Name, entry.Id);
+
+            if (entry is QueueEntry<T> val && val.Data["Pull-Strategy"].Equals(true)) {
+                var newLockedUntilUtc = await _messageReceiver.RenewLockAsync(entry.Id).AnyContext();
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Renew lock done: {Id} - {newLockedUntilUtc}", entry.Id, newLockedUntilUtc);
+            }
+
             await OnLockRenewedAsync(entry).AnyContext();
-            _logger.Trace("Renew lock done: {0}", entry.Id);
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Renew lock done: {Id}", entry.Id);
         }
 
         public override async Task CompleteAsync(IQueueEntry<T> entry) {
-            _logger.Debug("Queue {0} complete item: {1}", _options.Name, entry.Id);
+            if (_logger.IsEnabled(LogLevel.Debug)) _logger.LogDebug("Queue {Name} complete item: {Id}", _options.Name, entry.Id);
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
-            await _queueClient.CompleteAsync(new Guid(entry.Id)).AnyContext();
+            if (entry is QueueEntry<T> val) {
+                if (val.Data["Pull-Strategy"].Equals(true)) {
+                    await _messageReceiver.CompleteAsync(entry.Id).AnyContext();
+                }
+                else {
+                    await _queueClient.CompleteAsync(entry.Id).AnyContext();
+                }
+            }
+
             Interlocked.Increment(ref _completedCount);
             entry.MarkCompleted();
             await OnCompletedAsync(entry).AnyContext();
-            _logger.Trace("Complete done: {0}", entry.Id);
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Complete done: {Id}", entry.Id);
         }
 
         public override async Task AbandonAsync(IQueueEntry<T> entry) {
-            _logger.Debug("Queue {_options.Name}:{QueueId} abandon item: {entryId}", _options.Name, QueueId, entry.Id);
+            if (_logger.IsEnabled(LogLevel.Debug)) _logger.LogDebug("Queue {Name}:{QueueId} abandon item: {Id}", _options.Name, QueueId, entry.Id);
             if (entry.IsAbandoned || entry.IsCompleted)
                 throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
-            await _queueClient.AbandonAsync(new Guid(entry.Id)).AnyContext();
+            if (entry is QueueEntry<T> val && val.Data["Pull-Strategy"].Equals(false))
+                await _queueClient.AbandonAsync(entry.Id).AnyContext();
+            else
+                await _messageReceiver.AbandonAsync(entry.Id).AnyContext();
             Interlocked.Increment(ref _abandonedCount);
             entry.MarkAbandoned();
             await OnAbandonedAsync(entry).AnyContext();
-            _logger.Trace("Abandon complete: {entryId}", entry.Id);
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Abandon complete: {Id}", entry.Id);
         }
 
-        private async Task<IQueueEntry<T>> HandleDequeueAsync(BrokeredMessage brokeredMessage) {
+        private async Task<IQueueEntry<T>> HandleDequeueAsync(Message brokeredMessage) {
             if (brokeredMessage == null)
                 return null;
 
-            var message = await _serializer.DeserializeAsync<T>(brokeredMessage.GetBody<Stream>()).AnyContext();
+            var message = _serializer.Deserialize<T>(brokeredMessage.Body);
+
             Interlocked.Increment(ref _dequeuedCount);
-            var entry = new QueueEntry<T>(brokeredMessage.LockToken.ToString(), message, this, brokeredMessage.EnqueuedTimeUtc, brokeredMessage.DeliveryCount);
+                var entry = new QueueEntry<T>(brokeredMessage.SystemProperties.LockToken, message, this,
+                    brokeredMessage.ScheduledEnqueueTimeUtc, brokeredMessage.SystemProperties.DeliveryCount);
             await OnDequeuedAsync(entry).AnyContext();
             return entry;
         }
 
-        private QueueDescription CreateQueueDescription() {
-            var qd = new QueueDescription(_options.Name) {
+        private SBQueue CreateQueueDescription() {
+            var qd = new SBQueue(_options.Name) {
                 LockDuration = _options.WorkItemTimeout,
                 MaxDeliveryCount = _options.Retries + 1
             };
@@ -223,11 +281,12 @@ namespace Foundatio.Queues {
             if (_options.DuplicateDetectionHistoryTimeWindow.HasValue)
                 qd.DuplicateDetectionHistoryTimeWindow = _options.DuplicateDetectionHistoryTimeWindow.Value;
 
-            if (_options.EnableBatchedOperations.HasValue)
-                qd.EnableBatchedOperations = _options.EnableBatchedOperations.Value;
+            // todo : https://github.com/Azure/azure-service-bus/issues/88
+            //if (_options.EnableBatchedOperations.HasValue)
+            //    qd.EnableBatchedOperations = _options.EnableBatchedOperations.Value;
 
             if (_options.EnableDeadLetteringOnMessageExpiration.HasValue)
-                qd.EnableDeadLetteringOnMessageExpiration = _options.EnableDeadLetteringOnMessageExpiration.Value;
+                qd.DeadLetteringOnMessageExpiration = _options.EnableDeadLetteringOnMessageExpiration.Value;
 
             if (_options.EnableExpress.HasValue)
                 qd.EnableExpress = _options.EnableExpress.Value;
@@ -235,17 +294,17 @@ namespace Foundatio.Queues {
             if (_options.EnablePartitioning.HasValue)
                 qd.EnablePartitioning = _options.EnablePartitioning.Value;
 
-            if (!String.IsNullOrEmpty(_options.ForwardDeadLetteredMessagesTo))
-                qd.ForwardDeadLetteredMessagesTo = _options.ForwardDeadLetteredMessagesTo;
+            //if (!String.IsNullOrEmpty(_options.ForwardDeadLetteredMessagesTo))
+            //    qd.ForwardDeadLetteredMessagesTo = _options.ForwardDeadLetteredMessagesTo;
 
-            if (!String.IsNullOrEmpty(_options.ForwardTo))
-                qd.ForwardTo = _options.ForwardTo;
+            //if (!String.IsNullOrEmpty(_options.ForwardTo))
+            //    qd.ForwardTo = _options.ForwardTo;
 
-            if (_options.IsAnonymousAccessible.HasValue)
-                qd.IsAnonymousAccessible = _options.IsAnonymousAccessible.Value;
+            //if (_options.IsAnonymousAccessible.HasValue)
+                //qd.IsAnonymousAccessible = _options.IsAnonymousAccessible.Value;
 
             if (_options.MaxSizeInMegabytes.HasValue)
-                qd.MaxSizeInMegabytes = _options.MaxSizeInMegabytes.Value;
+                qd.MaxSizeInMegabytes = Convert.ToInt32 (_options.MaxSizeInMegabytes.Value);
 
             if (_options.RequiresDuplicateDetection.HasValue)
                 qd.RequiresDuplicateDetection = _options.RequiresDuplicateDetection.Value;
@@ -256,18 +315,57 @@ namespace Foundatio.Queues {
             if (_options.Status.HasValue)
                 qd.Status = _options.Status.Value;
 
-            if (_options.SupportOrdering.HasValue)
-                qd.SupportOrdering = _options.SupportOrdering.Value;
+            //if (_options.SupportOrdering.HasValue)
+            //    qd.SupportOrdering = _options.SupportOrdering.Value;
 
-            if (!String.IsNullOrEmpty(_options.UserMetadata))
-                qd.UserMetadata = _options.UserMetadata;
+            //if (!String.IsNullOrEmpty(_options.UserMetadata))
+            //    qd.UserMetadata = _options.UserMetadata;
 
             return qd;
         }
 
-        public override void Dispose() {
+        protected virtual async Task<ServiceBusManagementClient> GetManagementClient() {
+            var token = await AuthHelper.GetToken(_tokenValue, _tokenExpiresAtUtc, _options.TenantId, _options.ClientId, _options.ClientSecret).AnyContext();
+            if (token == null)
+                return null;
+
+            _tokenValue = token.TokenValue;
+            _tokenExpiresAtUtc = token.TokenExpiresAtUtc;
+
+            var creds = new TokenCredentials(token.TokenValue);
+            return new ServiceBusManagementClient(creds) { SubscriptionId = _options.SubscriptionId };
+        }
+
+        public override async void Dispose() {
             base.Dispose();
-            _queueClient?.Close();
+            await CloseQueueClientAsync();
+            await CloseMessageReceiverClientAsync();
+        }
+
+        private async Task CloseQueueClientAsync() {
+            if (_queueClient == null)
+                return;
+
+            using (await _lock.LockAsync().AnyContext()) {
+                if (_queueClient == null)
+                    return;
+
+                await _queueClient.CloseAsync().AnyContext();
+                _queueClient = null;
+            }
+        }
+
+        private async Task CloseMessageReceiverClientAsync() {
+            if (_messageReceiver == null)
+                return;
+
+            using (await _lock.LockAsync().AnyContext()) {
+                if (_messageReceiver == null)
+                    return;
+
+                await _messageReceiver.CloseAsync().AnyContext();
+                _messageReceiver = null;
+            }
         }
     }
 }

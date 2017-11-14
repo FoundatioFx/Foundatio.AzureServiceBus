@@ -4,29 +4,32 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Foundatio.Extensions;
-using Foundatio.Logging;
+using Microsoft.Extensions.Logging;
 using Foundatio.Serializer;
 using Foundatio.Utility;
-using Microsoft.ServiceBus;
-using Microsoft.ServiceBus.Messaging;
-using Nito.AsyncEx;
+using Microsoft.Azure.ServiceBus;
+using Foundatio.AzureServiceBus.Utility;
+using Microsoft.Azure.Management.ServiceBus;
+using Microsoft.Azure.Management.ServiceBus.Models;
+using Microsoft.Rest;
+using Foundatio.AsyncEx;
 
 namespace Foundatio.Messaging {
     public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBusOptions> {
         private readonly AsyncLock _lock = new AsyncLock();
-        private readonly NamespaceManager _namespaceManager;
         private TopicClient _topicClient;
         private SubscriptionClient _subscriptionClient;
         private readonly string _subscriptionName;
-
-        [Obsolete("Use the options overload")]
-        public AzureServiceBusMessageBus(string connectionString, string topicName, ISerializer serializer = null, ILoggerFactory loggerFactory = null) : this(new AzureServiceBusMessageBusOptions { ConnectionString = connectionString, Topic = topicName, SubscriptionName = "MessageBus", Serializer = serializer, LoggerFactory = loggerFactory }) { }
+        private string _tokenValue = String.Empty;
+        private DateTime _tokenExpiresAtUtc = DateTime.MinValue;
 
         public AzureServiceBusMessageBus(AzureServiceBusMessageBusOptions options) : base(options) {
-            if (String.IsNullOrEmpty(options.ConnectionString))
-                throw new ArgumentException("ConnectionString is required.");
+            if (String.IsNullOrWhiteSpace(options.ConnectionString))
+                throw new ArgumentException($"{nameof(options.ConnectionString)} is required.");
 
-            _namespaceManager = NamespaceManager.CreateFromConnectionString(options.ConnectionString);
+            if (String.IsNullOrWhiteSpace(options.SubscriptionId))
+                throw new ArgumentException($"{nameof(options.SubscriptionId)} is required.");
+
             _subscriptionName = _options.SubscriptionName ?? MessageBusId;
         }
 
@@ -42,36 +45,60 @@ namespace Foundatio.Messaging {
 
                 var sw = Stopwatch.StartNew();
                 try {
-                    await _namespaceManager.CreateSubscriptionAsync(CreateSubscriptionDescription()).AnyContext();
-                } catch (MessagingEntityAlreadyExistsException) { }
+                    var sbManagementClient = await GetManagementClient().AnyContext();
+                    if (sbManagementClient != null) {
+                        await sbManagementClient.Subscriptions.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName,
+                            _options.Topic, _subscriptionName, CreateSubscriptionDescription()).AnyContext();
+                    }
+                }
+                catch (ErrorResponseException) { }
 
                 // Look into message factory with multiple recievers so more than one connection is made and managed....
-                _subscriptionClient = SubscriptionClient.CreateFromConnectionString(_options.ConnectionString, _options.Topic, _subscriptionName, ReceiveMode.ReceiveAndDelete);
-                _subscriptionClient.OnMessageAsync(OnMessageAsync, new OnMessageOptions { /* AutoComplete = true, // Don't run with recieve and delete */ MaxConcurrentCalls = 6 /* calculate this based on the the thread count. */ });
-                if (_options.SubscriptionRetryPolicy != null)
-                    _subscriptionClient.RetryPolicy = _options.SubscriptionRetryPolicy;
+                _subscriptionClient = new SubscriptionClient(_options.ConnectionString, _options.Topic, _subscriptionName, _options.ReceiveMode, _options.SubscriptionRetryPolicy);
+
+                // Enable prefetch to speeden up the receive rate.
                 if (_options.PrefetchCount.HasValue)
                     _subscriptionClient.PrefetchCount = _options.PrefetchCount.Value;
 
+                // these are the default values of MessageHandlerOptions
+                var maxConcurrentCalls = 1;
+                bool autoComplete = true;
+                if (_options.MaxConcurrentCalls.HasValue)
+                    maxConcurrentCalls = _options.MaxConcurrentCalls.Value;
+
+                if (_options.AutoComplete.HasValue)
+                    autoComplete = _options.AutoComplete.Value;
+
+                _subscriptionClient.RegisterMessageHandler(OnMessageAsync, new MessageHandlerOptions(OnExceptionAsync) { MaxConcurrentCalls = maxConcurrentCalls, AutoComplete = autoComplete });
                 sw.Stop();
-                _logger.Trace("Ensure topic subscription exists took {0}ms.", sw.ElapsedMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Ensure topic subscription exists took {Duration:g}", sw.ElapsedMilliseconds);
             }
         }
 
-        private async Task OnMessageAsync(BrokeredMessage brokeredMessage) {
+        // Use this Handler to look at the exceptions received on the MessagePump
+        private Task OnExceptionAsync(ExceptionReceivedEventArgs args) {
+            if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(args.Exception, "Message handler encountered an exception.");
+            return Task.CompletedTask ;
+        }
+
+        private async Task OnMessageAsync(Message  brokeredMessage, CancellationToken cancellationToken) {
             if (_subscribers.IsEmpty)
                 return;
 
-            _logger.Trace("OnMessageAsync({messageId})", brokeredMessage.MessageId);
+            if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Received message: {MessageId} :{SequenceNumber}", brokeredMessage.MessageId, brokeredMessage.SystemProperties.SequenceNumber);
             MessageBusData message;
             try {
-                message = await _serializer.DeserializeAsync<MessageBusData>(brokeredMessage.GetBody<Stream>()).AnyContext();
+                message = _serializer.Deserialize<MessageBusData>(brokeredMessage.Body);
             } catch (Exception ex) {
-                _logger.Warn(ex, "OnMessageAsync({0}) Error deserializing messsage: {1}", brokeredMessage.MessageId, ex.Message);
-                await brokeredMessage.DeadLetterAsync("Deserialization error", ex.Message).AnyContext();
+                if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning(ex, "OnMessageAsync({MessageId}) Error deserializing messsage: {Message}", brokeredMessage.MessageId, ex.Message);
+                // A lock token can be found in LockToken, only when ReceiveMode is set to PeekLock
+                await _subscriptionClient.DeadLetterAsync(brokeredMessage.SystemProperties.LockToken).AnyContext();
                 return;
             }
 
+            if (_options.ReceiveMode == ReceiveMode.PeekLock && _options.AutoComplete == false) {
+                await _subscriptionClient.CompleteAsync(brokeredMessage.SystemProperties.LockToken).AnyContext();
+            }
             await SendMessageToSubscribersAsync(message, _serializer).AnyContext();
         }
 
@@ -85,35 +112,52 @@ namespace Foundatio.Messaging {
 
                 var sw = Stopwatch.StartNew();
                 try {
-                    await _namespaceManager.CreateTopicAsync(CreateTopicDescription()).AnyContext();
-                } catch (MessagingEntityAlreadyExistsException) { }
+                    var sbManagementClient = await GetManagementClient().AnyContext();
+                    if (sbManagementClient != null) {
+                        await sbManagementClient.Topics.CreateOrUpdateAsync(_options.ResourceGroupName,
+                                _options.NameSpaceName, _options.Topic, CreateTopicDescription(), cancellationToken)
+                            .AnyContext();
 
-                _topicClient = TopicClient.CreateFromConnectionString(_options.ConnectionString, _options.Topic);
+                    }
+                }
+                catch (ErrorResponseException e) {
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Error creating Topic Entity");
+                    throw;
+                }
+
+                _topicClient = new TopicClient(_options.ConnectionString, _options.Topic);
                 sw.Stop();
-                _logger.Trace("Ensure topic exists took {0}ms.", sw.ElapsedMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Ensure topic exists took {Duration:g}.", sw.ElapsedMilliseconds);
             }
         }
 
         protected override async Task PublishImplAsync(Type messageType, object message, TimeSpan? delay, CancellationToken cancellationToken) {
-            var data = await _serializer.SerializeToStreamAsync(new MessageBusData {
+            var data = _serializer.Serialize(new MessageBusData {
                 Type = messageType.AssemblyQualifiedName,
-                Data = await _serializer.SerializeToStringAsync(message).AnyContext()
-            }).AnyContext();
+                Data = _serializer.SerializeToString(message)
+            });
 
-            var brokeredMessage = new BrokeredMessage(data, true);
+            var brokeredMessage = new Message(data) {
+                MessageId = Guid.NewGuid().ToString()
+            };
 
             if (delay.HasValue && delay.Value > TimeSpan.Zero) {
-                _logger.Trace("Schedule delayed message: {messageType} ({delay}ms)", messageType.FullName, delay.Value.TotalMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Schedule delayed message: {FullName} {TotalMilliseconds}", messageType.FullName, delay.Value.TotalMilliseconds);
                 brokeredMessage.ScheduledEnqueueTimeUtc = SystemClock.UtcNow.Add(delay.Value);
             } else {
-                _logger.Trace("Message Publish: {messageType}", messageType.FullName);
+                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Message Publish: {FullName}", messageType.FullName);
             }
 
-            await _topicClient.SendAsync(brokeredMessage).AnyContext();
+            try {
+                await _topicClient.SendAsync(brokeredMessage).AnyContext();
+            }
+            catch (MessagingEntityNotFoundException e) {
+                if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Make sure Entity is created");
+            }
         }
 
-        private TopicDescription CreateTopicDescription() {
-            var td = new TopicDescription(_options.Topic);
+        private SBTopic CreateTopicDescription() {
+            var td = new SBTopic(_options.Topic);
 
             if (_options.TopicAutoDeleteOnIdle.HasValue)
                 td.AutoDeleteOnIdle = _options.TopicAutoDeleteOnIdle.Value;
@@ -122,7 +166,7 @@ namespace Foundatio.Messaging {
                 td.DefaultMessageTimeToLive = _options.TopicDefaultMessageTimeToLive.Value;
 
             if (_options.TopicMaxSizeInMegabytes.HasValue)
-                td.MaxSizeInMegabytes = _options.TopicMaxSizeInMegabytes.Value;
+                td.MaxSizeInMegabytes = Convert.ToInt32(_options.TopicMaxSizeInMegabytes.Value);
 
             if (_options.TopicRequiresDuplicateDetection.HasValue)
                 td.RequiresDuplicateDetection = _options.TopicRequiresDuplicateDetection.Value;
@@ -133,11 +177,11 @@ namespace Foundatio.Messaging {
             if (_options.TopicEnableBatchedOperations.HasValue)
                 td.EnableBatchedOperations = _options.TopicEnableBatchedOperations.Value;
 
-            if (_options.TopicEnableFilteringMessagesBeforePublishing.HasValue)
-                td.EnableFilteringMessagesBeforePublishing = _options.TopicEnableFilteringMessagesBeforePublishing.Value;
+            //if (_options.TopicEnableFilteringMessagesBeforePublishing.HasValue)
+            //    td.EnableFilteringMessagesBeforePublishing = _options.TopicEnableFilteringMessagesBeforePublishing.Value;
 
-            if (_options.TopicIsAnonymousAccessible.HasValue)
-                td.IsAnonymousAccessible = _options.TopicIsAnonymousAccessible.Value;
+            //if (_options.TopicIsAnonymousAccessible.HasValue)
+            //    td.IsAnonymousAccessible = _options.TopicIsAnonymousAccessible.Value;
 
             if (_options.TopicStatus.HasValue)
                 td.Status = _options.TopicStatus.Value;
@@ -151,14 +195,14 @@ namespace Foundatio.Messaging {
             if (_options.TopicEnableExpress.HasValue)
                 td.EnableExpress = _options.TopicEnableExpress.Value;
 
-            if (!String.IsNullOrEmpty(_options.TopicUserMetadata))
-                td.UserMetadata = _options.TopicUserMetadata;
+            //if (!String.IsNullOrEmpty(_options.TopicUserMetadata))
+            //    td.UserMetadata = _options.TopicUserMetadata;
 
             return td;
         }
 
-        private SubscriptionDescription CreateSubscriptionDescription() {
-            var sd = new SubscriptionDescription(_options.Topic, _subscriptionName);
+        private SBSubscription CreateSubscriptionDescription() {
+            var sd = new SBSubscription(_options.Topic, _subscriptionName);
 
             if (_options.SubscriptionAutoDeleteOnIdle.HasValue)
                 sd.AutoDeleteOnIdle = _options.SubscriptionAutoDeleteOnIdle.Value;
@@ -173,10 +217,11 @@ namespace Foundatio.Messaging {
                 sd.RequiresSession = _options.SubscriptionRequiresSession.Value;
 
             if (_options.SubscriptionEnableDeadLetteringOnMessageExpiration.HasValue)
-                sd.EnableDeadLetteringOnMessageExpiration = _options.SubscriptionEnableDeadLetteringOnMessageExpiration.Value;
+                sd.DeadLetteringOnMessageExpiration = _options.SubscriptionEnableDeadLetteringOnMessageExpiration.Value;
 
-            if (_options.SubscriptionEnableDeadLetteringOnFilterEvaluationExceptions.HasValue)
-                sd.EnableDeadLetteringOnFilterEvaluationExceptions = _options.SubscriptionEnableDeadLetteringOnFilterEvaluationExceptions.Value;
+            // https://github.com/Azure/azure-service-bus-dotnet/issues/255 - Its a bug and should be fixed in the next release.
+            //if (_options.SubscriptionEnableDeadLetteringOnFilterEvaluationExceptions.HasValue)
+            //    sd.EnableDeadLetteringOnFilterEvaluationExceptions = _options.SubscriptionEnableDeadLetteringOnFilterEvaluationExceptions.Value;
 
             if (_options.SubscriptionMaxDeliveryCount.HasValue)
                 sd.MaxDeliveryCount = _options.SubscriptionMaxDeliveryCount.Value;
@@ -187,48 +232,60 @@ namespace Foundatio.Messaging {
             if (_options.SubscriptionStatus.HasValue)
                 sd.Status = _options.SubscriptionStatus.Value;
 
-            if (!String.IsNullOrEmpty(_options.SubscriptionForwardTo))
-                sd.ForwardTo = _options.SubscriptionForwardTo;
+            //if (!String.IsNullOrEmpty(_options.SubscriptionForwardTo))
+            //    sd.ForwardTo = _options.SubscriptionForwardTo;
 
-            if (!String.IsNullOrEmpty(_options.SubscriptionForwardDeadLetteredMessagesTo))
-                sd.ForwardDeadLetteredMessagesTo = _options.SubscriptionForwardDeadLetteredMessagesTo;
+            //if (!String.IsNullOrEmpty(_options.SubscriptionForwardDeadLetteredMessagesTo))
+            //    sd.ForwardDeadLetteredMessagesTo = _options.SubscriptionForwardDeadLetteredMessagesTo;
 
-            if (!String.IsNullOrEmpty(_options.SubscriptionUserMetadata))
-                sd.UserMetadata = _options.SubscriptionUserMetadata;
+            //if (!String.IsNullOrEmpty(_options.SubscriptionUserMetadata))
+            //    sd.UserMetadata = _options.SubscriptionUserMetadata;
 
             return sd;
         }
 
-        public override void Dispose() {
+        public override async void Dispose() {
             base.Dispose();
-            CloseTopicClient();
-            CloseSubscriptionClient();
+            await CloseTopicClientAsync();
+            await CloseSubscriptionClientAsync();
         }
 
-        private void CloseTopicClient() {
+        private async Task CloseTopicClientAsync() {
             if (_topicClient == null)
                 return;
 
-            using (_lock.Lock()) {
+            using (await _lock.LockAsync().AnyContext()) {
                 if (_topicClient == null)
                     return;
 
-                _topicClient?.Close();
+                await _topicClient.CloseAsync().AnyContext();
                 _topicClient = null;
             }
         }
 
-        private void CloseSubscriptionClient() {
+        private async Task CloseSubscriptionClientAsync() {
             if (_subscriptionClient == null)
                 return;
 
-            using (_lock.Lock()) {
+            using (await _lock.LockAsync().AnyContext()) {
                 if (_subscriptionClient == null)
                     return;
 
-                _subscriptionClient?.Close();
+                await _subscriptionClient.CloseAsync().AnyContext();
                 _subscriptionClient = null;
             }
+        }
+
+        protected virtual async Task<ServiceBusManagementClient> GetManagementClient() {
+            var token = await AuthHelper.GetToken(_tokenValue, _tokenExpiresAtUtc, _options.TenantId, _options.ClientId, _options.ClientSecret).AnyContext();
+            if (token == null)
+                return null;
+
+            _tokenValue = token.TokenValue;
+            _tokenExpiresAtUtc = token.TokenExpiresAtUtc;
+
+            var creds = new TokenCredentials(token.TokenValue);
+            return new ServiceBusManagementClient(creds) { SubscriptionId = _options.SubscriptionId };
         }
     }
 }
