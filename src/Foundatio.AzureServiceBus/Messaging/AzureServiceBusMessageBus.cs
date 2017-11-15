@@ -53,7 +53,10 @@ namespace Foundatio.Messaging {
                             logger: _logger, cancellationToken: cancellationToken).AnyContext();
                     }
                 }
-                catch (ErrorResponseException) { }
+                catch (ErrorResponseException e) {
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Error creating Topic {SubscriptionName}", _subscriptionName);
+                    throw;
+                }
 
                 // Look into message factory with multiple recievers so more than one connection is made and managed....
                 _subscriptionClient = new SubscriptionClient(_options.ConnectionString, _options.Topic, _subscriptionName, _options.ReceiveMode, _options.SubscriptionRetryPolicy);
@@ -124,7 +127,7 @@ namespace Foundatio.Messaging {
                     }
                 }
                 catch (ErrorResponseException e) {
-                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Error creating Topic Entity");
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Error creating {TopicName} Entity", _options.Topic);
                     throw;
                 }
 
