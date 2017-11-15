@@ -47,8 +47,10 @@ namespace Foundatio.Messaging {
                 try {
                     var sbManagementClient = await GetManagementClient().AnyContext();
                     if (sbManagementClient != null) {
-                        await sbManagementClient.Subscriptions.CreateOrUpdateAsync(_options.ResourceGroupName, _options.NameSpaceName,
-                            _options.Topic, _subscriptionName, CreateSubscriptionDescription()).AnyContext();
+                        await Run.WithRetriesAsync(() => sbManagementClient.Subscriptions.CreateOrUpdateAsync(_options.ResourceGroupName,
+                                _options.NameSpaceName, _options.Topic, _subscriptionName,
+                                CreateSubscriptionDescription(), cancellationToken),
+                            logger: _logger, cancellationToken: cancellationToken).AnyContext();
                     }
                 }
                 catch (ErrorResponseException) { }
@@ -114,9 +116,10 @@ namespace Foundatio.Messaging {
                 try {
                     var sbManagementClient = await GetManagementClient().AnyContext();
                     if (sbManagementClient != null) {
-                        await sbManagementClient.Topics.CreateOrUpdateAsync(_options.ResourceGroupName,
-                                _options.NameSpaceName, _options.Topic, CreateTopicDescription(), cancellationToken)
-                            .AnyContext();
+                        await Run.WithRetriesAsync(() => sbManagementClient.Topics.CreateOrUpdateAsync(_options.ResourceGroupName,
+                                _options.NameSpaceName, _options.Topic, CreateTopicDescription(), cancellationToken),
+                            logger: _logger,
+                            cancellationToken: cancellationToken).AnyContext();
 
                     }
                 }

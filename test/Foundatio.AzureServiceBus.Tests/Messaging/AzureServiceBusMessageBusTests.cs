@@ -180,7 +180,7 @@ namespace Foundatio.AzureServiceBus.Tests.Messaging {
             }
         }
 
-        [Fact(Skip = "Throwing 429 error code. Bug logged")]
+        [Fact]
         public override Task CanReceiveMessagesConcurrentlyAsync() {
             return base.CanReceiveMessagesConcurrentlyAsync();
         }
