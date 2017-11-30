@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using Foundatio.AsyncEx;
 
 using Foundatio.AsyncEx;
 namespace Foundatio.Extensions {
