@@ -3,6 +3,7 @@
 [![Build status](https://ci.appveyor.com/api/projects/status/m5a8n4uv52rp0ejr?svg=true)](https://ci.appveyor.com/project/Exceptionless/foundatio-azureservicebus-ro7fq)
 [![NuGet Version](http://img.shields.io/nuget/v/Foundatio.AzureServiceBus.svg?style=flat)](https://www.nuget.org/packages/Foundatio.AzureServiceBus/)
 [![Slack Status](https://slack.exceptionless.com/badge.svg)](https://slack.exceptionless.com)
+[![Help Contribute to Open Source](https://www.codetriage.com/foundatiofx/foundatio.azureservicebus/badges/users.svg)](https://www.codetriage.com/foundatiofx/foundatio.azureservicebus)
 
 Pluggable foundation blocks for building loosely coupled distributed apps.
 - [Caching](#caching)
