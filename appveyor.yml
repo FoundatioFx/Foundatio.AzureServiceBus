@@ -6,6 +6,10 @@ configuration: Release
 pull_requests:
   do_not_increment_build_number: true
 
+AzureServiceBusConnectionString:
+  my_variable:
+    secure: BkCMv3W9HoO56/8CCdOOSp/EbKFYXDtqteIzbLeha2MdxLyPLURnkg8L6oIu4CQQukzsK1YWRM2JIxHrJyDWPJuyI/+tBiqhgCHz7xpHtlZEbnDaBsPxyYxOribYzT727/z3fl2hQKOgdNb9ky81a4Rib91ICSZ6dMilnrY/3/mI//LOGKJmbQo8uafmGq5itsTQ9sEvjMu5VPOtu22Rug==
+
 init:
   - git config --global core.autocrlf input
   - ps: $env:GIT_HASH=$env:APPVEYOR_REPO_COMMIT.Substring(0, 10)
