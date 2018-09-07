@@ -1,10 +1,8 @@
 ﻿using System;
 using Microsoft.Azure.ServiceBus;
-using Microsoft.Azure.Management.ServiceBus.Models;
 
 namespace Foundatio.Messaging {
-    public class AzureServiceBusMessageBusOptions : MessageBusOptionsBase {
-
+    public class AzureServiceBusMessageBusOptions : SharedMessageBusOptions {
         public string ClientId { get; set; }
 
         public string ClientSecret { get; set; }

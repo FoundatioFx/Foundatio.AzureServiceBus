@@ -7,11 +7,8 @@ using Foundatio.Extensions;
 using Foundatio.Utility;
 using Microsoft.Azure.ServiceBus;
 using Foundatio.AzureServiceBus.Utility;
-using Microsoft.Azure.Management.ServiceBus;
-using Microsoft.Azure.Management.ServiceBus.Models;
 using Microsoft.Azure.ServiceBus.Core;
 using Microsoft.Extensions.Logging;
-using Microsoft.Rest;
 using Foundatio.AsyncEx;
 using Foundatio.Serializer;
 
@@ -73,13 +70,9 @@ namespace Foundatio.Queues {
                     }
                 }
                 catch (ServiceBusTimeoutException e) {
-                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Errror while creating the queue");
-                }
-                catch (ErrorResponseException e) {
-                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Errror while creating the queue");
-                }
-                catch (Exception e) {
-                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Errror while creating the queue");
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Error while creating the queue");
+                } catch (Exception e) {
+                    if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Error while creating the queue");
                 }
 
                 _queueClient = new QueueClient(_options.ConnectionString, _options.Name, ReceiveMode.PeekLock, _options.RetryPolicy);
@@ -133,9 +126,10 @@ namespace Foundatio.Queues {
                 return null;
 
             Interlocked.Increment(ref _enqueuedCount);
-            var message = _serializer.Serialize(data);
-            var brokeredMessage = new Message(message);
-            brokeredMessage.MessageId = Guid.NewGuid().ToString();
+            var message = _serializer.SerializeToBytes(data);
+            var brokeredMessage = new Message(message) {
+                MessageId = Guid.NewGuid().ToString()
+            };
             await _queueClient.SendAsync(brokeredMessage).AnyContext(); // TODO: See if there is a way to send a batch of messages.
             var entry = new QueueEntry<T>(brokeredMessage.MessageId, data, this, SystemClock.UtcNow, 0);
             await OnEnqueuedAsync(entry).AnyContext();
@@ -152,10 +146,12 @@ namespace Foundatio.Queues {
             _queueClient.RegisterMessageHandler(async (msg, token) => {
                 if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("WorkerLoop Signaled {Name}", _options.Name);
                 var queueEntry = await HandleDequeueAsync(msg).AnyContext();
-                if (queueEntry != null) {
-                    var d = queueEntry as QueueEntry<T>;
-                    d?.Data.Add("Pull-Strategy", false);
-                    d?.Data.Add("LockedUntilUtc", msg.SystemProperties.LockedUntilUtc);
+                if (queueEntry == null)
+                    return;
+
+                var d = queueEntry as QueueEntry<T>;
+                d?.Data.Add("Pull-Strategy", false);
+                d?.Data.Add("LockedUntilUtc", msg.SystemProperties.LockedUntilUtc);
 
                 try {
                     using (var linkedCancellationToken = GetLinkedDisposableCanncellationTokenSource(cancellationToken)) {
@@ -163,15 +159,15 @@ namespace Foundatio.Queues {
                     }
 
                     if (autoComplete && !queueEntry.IsAbandoned && !queueEntry.IsCompleted)
-                } catch (Exception ex) {
                         await queueEntry.CompleteAsync().AnyContext();
+                } catch (Exception ex) {
                     Interlocked.Increment(ref _workerErrorCount);
-                    _logger.LogWarning(ex, "Error sending work item to worker: {0}", ex.Message);
+                    _logger.LogWarning(ex, "Error sending work item to worker: {Message}", ex.Message);
 
-                        if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
-                            await queueEntry.AbandonAsync().AnyContext();
-                    }
+                    if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
+                        await queueEntry.AbandonAsync().AnyContext();
                 }
+
                 // AutoComplete is true by default in MessageHandlerOptions. In the old library it used to be false.
                 // We are not using default value because our library provides the option to the user to call CompleteAsync
                 // either during the handler or after the handler is done processing. 

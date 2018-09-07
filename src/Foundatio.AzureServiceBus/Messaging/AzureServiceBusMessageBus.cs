@@ -8,10 +8,8 @@ using Microsoft.Extensions.Logging;
 using Foundatio.Serializer;
 using Foundatio.Utility;
 using Microsoft.Azure.ServiceBus;
+using Microsoft.Azure.ServiceBus.Management;
 using Foundatio.AzureServiceBus.Utility;
-using Microsoft.Azure.Management.ServiceBus;
-using Microsoft.Azure.Management.ServiceBus.Models;
-using Microsoft.Rest;
 using Foundatio.AsyncEx;
 
 namespace Foundatio.Messaging {
@@ -129,8 +127,7 @@ namespace Foundatio.Messaging {
                             cancellationToken: cancellationToken).AnyContext();
 
                     }
-                }
-                catch (ErrorResponseException e) {
+                } catch (ErrorResponseException e) {
                     if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Error creating {TopicName} Entity", _options.Topic);
                     throw;
                 }
@@ -141,27 +138,25 @@ namespace Foundatio.Messaging {
             }
         }
 
-        protected override Task PublishImplAsync(string messageType, object message, TimeSpan? delay, CancellationToken cancellationToken) {
-            var data = _serializer.Serialize(new MessageBusData {
-                Type = messageType.AssemblyQualifiedName,
-                Data = _serializer.SerializeToString(message)
+        protected override async Task PublishImplAsync(string messageType, object message, TimeSpan? delay, CancellationToken cancellationToken) {
+            byte[] data = _serializer.SerializeToBytes(new MessageBusData {
+                Type = messageType,
+                Data = _serializer.SerializeToBytes(message)
             });
-
             var brokeredMessage = new Message(data) {
                 MessageId = Guid.NewGuid().ToString()
             };
 
             if (delay.HasValue && delay.Value > TimeSpan.Zero) {
-                _logger.LogTrace("Schedule delayed message: {messageType} ({delay}ms)", messageType, delay.Value.TotalMilliseconds);
+                _logger.LogTrace("Schedule delayed message: {MessageType} ({Duration:g})", messageType, delay.Value.TotalMilliseconds);
                 brokeredMessage.ScheduledEnqueueTimeUtc = SystemClock.UtcNow.Add(delay.Value);
             } else {
-                _logger.LogTrace("Message Publish: {messageType}", messageType);
+                _logger.LogTrace("Message Publish: {MessageType}", messageType);
             }
 
             try {
                 await _topicClient.SendAsync(brokeredMessage).AnyContext();
-            }
-            catch (MessagingEntityNotFoundException e) {
+            } catch (MessagingEntityNotFoundException e) {
                 if (_logger.IsEnabled(LogLevel.Error)) _logger.LogError(e, "Make sure Entity is created");
             }
         }
