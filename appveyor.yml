@@ -1,10 +1,14 @@
-version: 6.1.{build}
+version: 7.0.{build}
 os: Visual Studio 2017
 clone_depth: 2
 configuration: Release
 
 pull_requests:
   do_not_increment_build_number: true
+
+environment:
+  ConnectionStrings__AzureServiceBusConnectionString.off:
+    secure: BkCMv3W9HoO56/8CCdOOSp/EbKFYXDtqteIzbLeha2MdxLyPLURnkg8L6oIu4CQQukzsK1YWRM2JIxHrJyDWPJuyI/+tBiqhgCHz7xpHtlZEbnDaBsPxyYxOribYzT727/z3fl2hQKOgdNb9ky81a4Rib91ICSZ6dMilnrY/3/mI//LOGKJmbQo8uafmGq5itsTQ9sEvjMu5VPOtu22Rug==
 
 init:
   - git config --global core.autocrlf input

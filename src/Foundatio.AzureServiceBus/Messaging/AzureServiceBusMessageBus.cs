@@ -33,6 +33,9 @@ namespace Foundatio.Messaging {
             _subscriptionName = _options.SubscriptionName ?? MessageBusId;
         }
 
+        public AzureServiceBusMessageBus(Builder<AzureServiceBusMessageBusOptionsBuilder, AzureServiceBusMessageBusOptions> config)
+            : this(config(new AzureServiceBusMessageBusOptionsBuilder()).Build()) { }
+
         protected override async Task EnsureTopicSubscriptionAsync(CancellationToken cancellationToken) {
             if (_subscriptionClient != null)
                 return;
@@ -104,7 +107,8 @@ namespace Foundatio.Messaging {
             if (_options.ReceiveMode == ReceiveMode.PeekLock && _options.AutoComplete == false) {
                 await _subscriptionClient.CompleteAsync(brokeredMessage.SystemProperties.LockToken).AnyContext();
             }
-            await SendMessageToSubscribersAsync(message, _serializer).AnyContext();
+            SendMessageToSubscribers(message, _serializer);
+            return Task.CompletedTask;
         }
 
         protected override async Task EnsureTopicCreatedAsync(CancellationToken cancellationToken) {
@@ -137,7 +141,7 @@ namespace Foundatio.Messaging {
             }
         }
 
-        protected override async Task PublishImplAsync(Type messageType, object message, TimeSpan? delay, CancellationToken cancellationToken) {
+        protected override Task PublishImplAsync(string messageType, object message, TimeSpan? delay, CancellationToken cancellationToken) {
             var data = _serializer.Serialize(new MessageBusData {
                 Type = messageType.AssemblyQualifiedName,
                 Data = _serializer.SerializeToString(message)
@@ -148,10 +152,10 @@ namespace Foundatio.Messaging {
             };
 
             if (delay.HasValue && delay.Value > TimeSpan.Zero) {
-                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Schedule delayed message: {FullName} {TotalMilliseconds}", messageType.FullName, delay.Value.TotalMilliseconds);
+                _logger.LogTrace("Schedule delayed message: {messageType} ({delay}ms)", messageType, delay.Value.TotalMilliseconds);
                 brokeredMessage.ScheduledEnqueueTimeUtc = SystemClock.UtcNow.Add(delay.Value);
             } else {
-                if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("Message Publish: {FullName}", messageType.FullName);
+                _logger.LogTrace("Message Publish: {messageType}", messageType);
             }
 
             try {

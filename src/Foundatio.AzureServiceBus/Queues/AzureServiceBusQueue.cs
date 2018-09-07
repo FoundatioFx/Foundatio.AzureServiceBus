@@ -54,6 +54,9 @@ namespace Foundatio.Queues {
             _messageReceiver = new MessageReceiver(_options.ConnectionString, _options.Name);
         }
 
+        public AzureServiceBusQueue(Builder<AzureServiceBusQueueOptionsBuilder<T>, AzureServiceBusQueueOptions<T>> config)
+            : this(config(new AzureServiceBusQueueOptionsBuilder<T>()).Build()) { }
+
         protected override async Task EnsureQueueCreatedAsync(CancellationToken cancellationToken = new CancellationToken()) {
             if (_queueClient != null)
                 return;
@@ -144,8 +147,6 @@ namespace Foundatio.Queues {
             if (handler == null)
                 throw new ArgumentNullException(nameof(handler));
 
-            var linkedCancellationToken = GetLinkedDisposableCanncellationToken(cancellationToken);
-
             // TODO: How do you unsubscribe from this or bail out on queue disposed?
             if (_logger.IsEnabled(LogLevel.Trace)) _logger.LogTrace("WorkerLoop Start {Name}", _options.Name);
             _queueClient.RegisterMessageHandler(async (msg, token) => {
@@ -156,14 +157,16 @@ namespace Foundatio.Queues {
                     d?.Data.Add("Pull-Strategy", false);
                     d?.Data.Add("LockedUntilUtc", msg.SystemProperties.LockedUntilUtc);
 
-                    try {
-                        await handler(queueEntry, linkedCancellationToken).AnyContext();
-                        if (autoComplete && !queueEntry.IsAbandoned && !queueEntry.IsCompleted)
-                            await queueEntry.CompleteAsync().AnyContext();
+                try {
+                    using (var linkedCancellationToken = GetLinkedDisposableCanncellationTokenSource(cancellationToken)) {
+                        await handler(queueEntry, linkedCancellationToken.Token).AnyContext();
                     }
-                    catch (Exception ex) {
-                        Interlocked.Increment(ref _workerErrorCount);
-                        if (_logger.IsEnabled(LogLevel.Warning)) _logger.LogWarning(ex, "Error sending work item to worker: {Message}", ex.Message);
+
+                    if (autoComplete && !queueEntry.IsAbandoned && !queueEntry.IsCompleted)
+                } catch (Exception ex) {
+                        await queueEntry.CompleteAsync().AnyContext();
+                    Interlocked.Increment(ref _workerErrorCount);
+                    _logger.LogWarning(ex, "Error sending work item to worker: {0}", ex.Message);
 
                         if (!queueEntry.IsAbandoned && !queueEntry.IsCompleted)
                             await queueEntry.AbandonAsync().AnyContext();

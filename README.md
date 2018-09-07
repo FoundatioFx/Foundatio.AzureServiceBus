@@ -26,12 +26,14 @@ When building several big cloud applications we found a lack of great solutions 
 To summarize, if you want pain free development and testing while allowing your app to scale, use Foundatio!
 
 ## Implementations
-- [Redis](https://github.com/FoundatioFx/Foundatio.Redis) - Caching, Queues, Messaging, Locks, Metrics
+- [Redis](https://github.com/FoundatioFx/Foundatio.Redis) - Caching, Storage, Queues, Messaging, Locks, Metrics
 - [Azure Storage](https://github.com/FoundatioFx/Foundatio.AzureStorage) - Storage, Queues
 - [Azure ServiceBus](https://github.com/FoundatioFx/Foundatio.AzureServiceBus) - Queues, Messaging
 - [AWS](https://github.com/FoundatioFx/Foundatio.AWS) - Storage, Queues, Metrics
 - [RabbitMQ](https://github.com/FoundatioFx/Foundatio.RabbitMQ) - Queues
+- [Minio](https://github.com/FoundatioFx/Foundatio.Minio) - Storage
 - [Aliyun](https://github.com/FoundatioFx/Foundatio.Aliyun) - Storage
+- [SshNet](https://github.com/FoundatioFx/Foundatio.Storage.SshNet) - Storage
 
 ## Getting Started (Development)
 
@@ -39,7 +41,7 @@ To summarize, if you want pain free development and testing while allowing your 
 
 **This section is for development purposes only! If you are trying to use the Foundatio libraries, please get them from NuGet.**
 
-1. You will need to have [Visual Studio 2017](http://www.visualstudio.com/products/visual-studio-community-vs) installed.
+1. You will need to have [Visual Studio Code](https://code.visualstudio.com) installed.
 2. Open the `Foundatio.sln` Visual Studio solution file.
 
 ## Using Foundatio
@@ -60,7 +62,7 @@ Caching allows you to store and access data lightning fast, saving you exspensiv
 ```csharp
 using Foundatio.Caching;
 
-ICacheClient cache = new InMemoryCacheClient(new InMemoryCacheClientOptions());
+ICacheClient cache = new InMemoryCacheClient();
 await cache.SetAsync("test", 1);
 var value = await cache.GetAsync<int>("test");
 ```
@@ -79,7 +81,7 @@ Queues offer First In, First Out (FIFO) message delivery. We provide four differ
 ```csharp
 using Foundatio.Queues;
 
-IQueue<SimpleWorkItem> queue = new InMemoryQueue<SimpleWorkItem>(new InMemoryQueueOptions<SimpleWorkItem>());
+IQueue<SimpleWorkItem> queue = new InMemoryQueue<SimpleWorkItem>();
 
 await queue.EnqueueAsync(new SimpleWorkItem {
     Data = "Hello"
@@ -103,15 +105,15 @@ It's worth noting that all lock providers take a `ICacheClient`. This allows you
 ```csharp
 using Foundatio.Lock;
 
-ILockProvider locker = new CacheLockProvider(new InMemoryCacheClient(new InMemoryCacheClientOptions()), new InMemoryMessageBus(new InMemoryMessageBusOptions()));
-using (await locker.AcquireAsync("test")) {
-  // ...
-}
+ILockProvider locker = new CacheLockProvider(new InMemoryCacheClient(), new InMemoryMessageBus());
+var lock = await locker.AcquireAsync("test");
+// ...
+await lock.ReleaseAsync();
 
-ILockProvider locker = new ThrottledLockProvider(new InMemoryCacheClient(new InMemoryCacheClientOptions()), 1, TimeSpan.FromMinutes(1));
-using (await locker.AcquireAsync("test")) {
-  // ...
-}
+ILockProvider throttledLocker = new ThrottledLockProvider(new InMemoryCacheClient(), 1, TimeSpan.FromMinutes(1));
+var throttledLock = await throttledLocker.AcquireAsync("test");
+// ...
+await throttledLock.ReleaseAsync();
 ```
 
 ### [Messaging](https://github.com/FoundatioFx/Foundatio/tree/master/src/Foundatio/Messaging)
@@ -128,7 +130,7 @@ Allows you to publish and subscribe to messages flowing through your application
 ```csharp
 using Foundatio.Messaging;
 
-IMessageBus messageBus = new InMemoryMessageBus(new InMemoryMessageBusOptions());
+IMessageBus messageBus = new InMemoryMessageBus();
 await messageBus.SubscribeAsync<SimpleMessageA>(msg => {
   // Got message
 });
@@ -160,8 +162,8 @@ Allows you to run a long running process (in process or out of process) without 
   ```csharp
   var job = new HelloWorldJob();
   await job.RunAsync(); // job.RunCount = 1;
-  await job.RunContinuous(iterationLimit: 2); // job.RunCount = 3;
-  await job.RunContinuous(cancellationToken: new CancellationTokenSource(TimeSpan.FromMilliseconds(10)).Token); // job.RunCount > 10;
+  await job.RunContinuousAsync(iterationLimit: 2); // job.RunCount = 3;
+  await job.RunContinuousAsync(cancellationToken: new CancellationTokenSource(10).Token); // job.RunCount > 10;
   ```
 
 2. **Queue Processor Jobs**: A queue processor job works great for working with jobs that will be driven from queued data. Queue Processor jobs must derive from [`QueueJobBase<T>` class](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio/Jobs/QueueJobBase.cs). You can then run jobs by calling `RunAsync()` on the job or passing it to the [`JobRunner` class](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio/Jobs/JobRunner.cs). The JobRunner can be used to easily run your jobs as Azure Web Jobs.
@@ -190,7 +192,7 @@ Allows you to run a long running process (in process or out of process) without 
 
   ```csharp
    // Register the queue for HelloWorldQueueItem.
-  container.AddSingleton<IQueue<HelloWorldQueueItem>>(s => new InMemoryQueue<HelloWorldQueueItem>(new InMemoryQueueOptions<WorkItemData>()));
+  container.AddSingleton<IQueue<HelloWorldQueueItem>>(s => new InMemoryQueue<HelloWorldQueueItem>());
 
   // To trigger the job we need to queue the HelloWorldWorkItem message.
   // This assumes that we injected an instance of IQueue<HelloWorldWorkItem> queue
@@ -203,7 +205,7 @@ Allows you to run a long running process (in process or out of process) without 
 
   await queue.EnqueueAsync(new HelloWorldWorkItem { Message = "Hello World" });
   await queue.EnqueueAsync(new HelloWorldWorkItem { Message = "Hello World" });
-  await job.RunUntilEmpty(); // job.RunCount = 3;
+  await job.RunUntilEmptyAsync(); // job.RunCount = 3;
   ```
 
 3. **Work Item Jobs**: A work item job will run in a job pool among other work item jobs. This type of job works great for things that don't happen often but should be in a job (Example: Deleting an entity that has many children.). It will be triggered when you publish a message on the `message bus`. The job must derive from the [`WorkItemHandlerBase` class](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio/Jobs/WorkItemJob/WorkItemHandlerBase.cs). You can then run all shared jobs via [`JobRunner` class](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio/Jobs/JobRunner.cs). The JobRunner can be used to easily run your jobs as Azure Web Jobs.
@@ -248,7 +250,7 @@ Allows you to run a long running process (in process or out of process) without 
   container.AddSingleton(handlers);
 
   // Register the queue for WorkItemData.
-  container.AddSingleton<IQueue<WorkItemData>>(s => new InMemoryQueue<WorkItemData>(new InMemoryQueueOptions<WorkItemData>()));
+  container.AddSingleton<IQueue<WorkItemData>>(s => new InMemoryQueue<WorkItemData>());
 
   // The job runner will automatically look for and run all registered WorkItemHandlers.
   new JobRunner(container.GetRequiredService<WorkItemJob>(), instanceCount: 2).RunInBackground();
@@ -272,7 +274,10 @@ We provide different file storage implementations that derive from the [`IFileSt
 2. [FolderFileStorage](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio/Storage/FolderFileStorage.cs): An file storage implementation that uses the hard drive for storage.
 3. [AzureFileStorage](https://github.com/FoundatioFx/Foundatio.AzureStorage/blob/master/src/Foundatio.AzureStorage/Storage/AzureFileStorage.cs): An Azure Blob storage implementation.
 4. [S3FileStorage](https://github.com/FoundatioFx/Foundatio.AWS/blob/master/src/Foundatio.AWS/Storage/S3FileStorage.cs): An AWS S3 file storage implementation.
-5. [AliyunFileStorage](https://github.com/FoundatioFx/Foundatio.Aliyun/blob/master/src/Foundatio.Aliyun/Storage/AliyunFileStorage.cs): An Aliyun file storage implementation.
+5. [RedisFileStorage](https://github.com/FoundatioFx/Foundatio.Redis/blob/master/src/Foundatio.Redis/Storage/RedisFileStorage.cs): An Redis file storage implementation.
+6. [MinioFileStorage](https://github.com/FoundatioFx/Foundatio.Minio/blob/master/src/Foundatio.Minio/Storage/MinioFileStorage.cs) An Minio file storage implementation.
+7. [AliyunFileStorage](https://github.com/FoundatioFx/Foundatio.Aliyun/blob/master/src/Foundatio.Aliyun/Storage/AliyunFileStorage.cs): An Aliyun file storage implementation.
+8. [SshNetFileStorage](https://github.com/FoundatioFx/Foundatio.Storage.SshNet/blob/master/src/Foundatio.Storage.SshNet/Storage/SshNetFileStorage.cs): An SFTP file storage implementation.
 
 We recommend using all of the `IFileStorage` implementations as singletons.
 
@@ -288,19 +293,20 @@ string content = await storage.GetFileContentsAsync("test.txt")
 
 ### [Metrics](https://github.com/FoundatioFx/Foundatio/tree/master/src/Foundatio/Metrics)
 
-We provide four implementations that derive from the [`IMetricsClient` interface](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio/Metrics/IMetricsClient.cs):
+We provide five implementations that derive from the [`IMetricsClient` interface](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio/Metrics/IMetricsClient.cs):
 
 1. [InMemoryMetricsClient](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio/Metrics/InMemoryMetricsClient.cs): An in memory metrics implementation.
 2. [RedisMetricsClient](https://github.com/FoundatioFx/Foundatio.Redis/blob/master/src/Foundatio.Redis/Metrics/RedisMetricsClient.cs): An Redis metrics implementation.
 3. [StatsDMetricsClient](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio/Metrics/StatsDMetricsClient.cs): An statsd metrics implementation.
 4. [MetricsNETClient](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio.MetricsNET/MetricsNETClient.cs): An [Metrics.NET](https://github.com/Recognos/Metrics.NET) implementation.
+4. [AppMetricsClient](https://github.com/FoundatioFx/Foundatio/blob/master/src/Foundatio.AppMetrics/AppMetricsClient.cs): An [AppMetrics](https://github.com/AppMetrics/AppMetrics) implementation.
 
 We recommend using all of the `IMetricsClient` implementations as singletons.
 
 #### Sample
 
 ```csharp
-IMetricsClient metrics = new InMemoryMetricsClient(new InMemoryMetricsClientOptions());
+IMetricsClient metrics = new InMemoryMetricsClient();
 metrics.Counter("c1");
 metrics.Gauge("g1", 2.534);
 metrics.Timer("t1", 50788);
