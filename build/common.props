@@ -15,7 +15,7 @@
   <PropertyGroup>
     <Product>Foundatio</Product>
     <Description>Pluggable foundation blocks for building distributed apps.</Description>
-    <Copyright>Copyright (c) 2018 Foundatio.  All rights reserved.</Copyright>
+    <Copyright>Copyright (c) 2019 Foundatio.  All rights reserved.</Copyright>
     <Authors>FoundatioFx</Authors>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <WarningsAsErrors>true</WarningsAsErrors>
