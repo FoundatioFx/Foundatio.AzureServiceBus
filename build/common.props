@@ -40,4 +40,8 @@
     <PackageReference Include="AsyncFixer" Version="1.1.6" PrivateAssets="All" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="../../LICENSE.txt" Pack="true" Visible="false" PackagePath="$(PackageLicenseFile)" />
+  </ItemGroup>
+
 </Project>
