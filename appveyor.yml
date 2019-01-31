@@ -11,8 +11,8 @@ pull_requests:
 environment:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
-  ConnectionStrings__AzureServiceBusConnectionString.off:
-    secure: BkCMv3W9HoO56/8CCdOOSp/EbKFYXDtqteIzbLeha2MdxLyPLURnkg8L6oIu4CQQukzsK1YWRM2JIxHrJyDWPJuyI/+tBiqhgCHz7xpHtlZEbnDaBsPxyYxOribYzT727/z3fl2hQKOgdNb9ky81a4Rib91ICSZ6dMilnrY/3/mI//LOGKJmbQo8uafmGq5itsTQ9sEvjMu5VPOtu22Rug==
+  ConnectionStrings__AzureServiceBusConnectionString:
+    secure: 64/UiTDtjyattKbExuIsMKlZ4pLS1NjUYQp+lzlCnDFcRGhbrq0EQPfQtnjmeWcAI+9a2srCis4JOt6qciTw36TaHbs777uXXER1K4FsUHVdfgMi2aOKtcNij+A+goEqCzc/pmeehnwzTtCZHB0/XJ9zN9w5GqPZ4c11m63ysCGsOzLoWoyC+Oh6KF4sg9UEFiNU/6olUbbN738ihcX0Sel7uYf78qTTDHcgoxqBYQXc/hJBZqfshl6ixig+BcnJ
 
 init:
   - git config --global core.autocrlf input
