@@ -1,9 +1,8 @@
-﻿using System;
+using System;
 using System.Threading.Tasks;
 using Foundatio.Queues;
 using Foundatio.Tests.Queue;
 using Foundatio.Tests.Utility;
-using Microsoft.Azure.ServiceBus;
 using Microsoft.Extensions.Logging;
 using Xunit;
 using Xunit.Abstractions;
@@ -12,11 +11,31 @@ namespace Foundatio.AzureServiceBus.Tests.Queue;
 
 public class AzureServiceBusQueueTests : QueueTestBase
 {
-    private readonly string _queueName = "foundatio-" + Guid.NewGuid().ToString("N").Substring(10);
+    private static readonly bool _isEmulator = IsEmulator();
+    private static readonly string _queueName = GetQueueName();
+
+    private static bool IsEmulator()
+    {
+        string connectionString = Configuration.GetConnectionString("AzureServiceBusConnectionString");
+        return !String.IsNullOrEmpty(connectionString) &&
+            connectionString.Contains("UseDevelopmentEmulator=true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetQueueName()
+    {
+        if (_isEmulator)
+            return "foundatio-test-queue";
+
+        return "foundatio-" + Guid.NewGuid().ToString("N")[..10];
+    }
 
     public AzureServiceBusQueueTests(ITestOutputHelper output) : base(output)
     {
         Log.SetLogLevel<AzureServiceBusQueue<SimpleWorkItem>>(LogLevel.Trace);
+
+        // Disable stats assertions when using the emulator since admin API is not available
+        if (_isEmulator)
+            _assertStats = false;
     }
 
     protected override IQueue<SimpleWorkItem> GetQueue(int retries = 1, TimeSpan? workItemTimeout = null, TimeSpan? retryDelay = null, int[] retryMultipliers = null, int deadLetterMaxItems = 100, bool runQueueMaintenance = true, TimeProvider timeProvider = null)
@@ -25,30 +44,33 @@ public class AzureServiceBusQueueTests : QueueTestBase
         if (String.IsNullOrEmpty(connectionString))
             return null;
 
-        // TODO: Respect retryMultipliers
-        var retryPolicy = retryDelay.GetValueOrDefault() > TimeSpan.Zero
-            ? new RetryExponential(retryDelay.GetValueOrDefault(), retryDelay.GetValueOrDefault() + retryDelay.GetValueOrDefault(), retries + 1)
-            : RetryPolicy.NoRetry;
-
-        _logger.LogDebug("Queue Id: {QueueId}", _queueName);
-        return new AzureServiceBusQueue<SimpleWorkItem>(new AzureServiceBusQueueOptions<SimpleWorkItem>
+        var queue = new AzureServiceBusQueue<SimpleWorkItem>(o =>
         {
-            ConnectionString = connectionString,
-            Name = _queueName,
-            AutoDeleteOnIdle = TimeSpan.FromMinutes(5),
-            EnableBatchedOperations = true,
-            EnableExpress = true,
-            EnablePartitioning = true,
-            SupportOrdering = false,
-            RequiresDuplicateDetection = false,
-            RequiresSession = false,
-            Retries = retries,
-            RetryPolicy = retryPolicy,
-            TimeProvider = timeProvider,
-            MetricsPollingInterval = TimeSpan.Zero,
-            WorkItemTimeout = workItemTimeout.GetValueOrDefault(TimeSpan.FromMinutes(5)),
-            LoggerFactory = Log
+            o.ConnectionString(connectionString)
+             .Name(_queueName)
+             .Retries(retries)
+             .WorkItemTimeout(workItemTimeout.GetValueOrDefault(TimeSpan.FromMinutes(5)))
+             .DequeueInterval(TimeSpan.FromSeconds(1))
+             .ReadQueueTimeout(TimeSpan.FromSeconds(5))
+             .TimeProvider(timeProvider)
+             .MetricsPollingInterval(TimeSpan.Zero)
+             .LoggerFactory(Log);
+
+            // These options are not supported by the emulator
+            if (!_isEmulator)
+            {
+                o.AutoDeleteOnIdle(TimeSpan.FromMinutes(5))
+                 .EnableBatchedOperations(true)
+                 .EnablePartitioning(false) // Disabled to ensure consistent message delivery
+                 .RequiresDuplicateDetection(false)
+                 .RequiresSession(false);
+            }
+
+            return o;
         });
+
+        _logger.LogDebug("Queue Id: {QueueId}", queue.QueueId);
+        return queue;
     }
 
     protected override Task CleanupQueueAsync(IQueue<SimpleWorkItem> queue)

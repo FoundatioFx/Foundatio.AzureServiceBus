@@ -18,18 +18,29 @@ public class AzureServiceBusMessageBusTests : MessageBusTestBase
         if (String.IsNullOrEmpty(connectionString))
             return null;
 
+        // Use pre-configured subscription name when using the emulator
+        bool isEmulator = connectionString.Contains("UseDevelopmentEmulator=true", StringComparison.OrdinalIgnoreCase);
+
         return new AzureServiceBusMessageBus(o =>
         {
             o.ConnectionString(connectionString);
             o.Topic("test-messages");
-            o.TopicEnableBatchedOperations(true);
-            o.TopicEnableExpress(true);
-            o.TopicEnablePartitioning(true);
-            o.TopicSupportOrdering(false);
-            o.TopicRequiresDuplicateDetection(false);
-            o.SubscriptionAutoDeleteOnIdle(TimeSpan.FromMinutes(5));
-            o.SubscriptionEnableBatchedOperations(true);
-            o.SubscriptionMaxDeliveryCount(Int32.MaxValue);
+
+            if (isEmulator)
+                o.SubscriptionName("test-subscription");
+
+            // These options are not supported by the emulator
+            if (!isEmulator)
+            {
+                o.TopicEnableBatchedOperations(true);
+                o.TopicEnablePartitioning(true);
+                o.TopicSupportOrdering(false);
+                o.TopicRequiresDuplicateDetection(false);
+                o.SubscriptionAutoDeleteOnIdle(TimeSpan.FromMinutes(5));
+                o.SubscriptionEnableBatchedOperations(true);
+                o.SubscriptionMaxDeliveryCount(Int32.MaxValue);
+            }
+
             o.PrefetchCount(500);
             o.LoggerFactory(Log);
 

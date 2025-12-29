@@ -1,0 +1,51 @@
+name: foundatio-azureservicebus
+
+services:
+  servicebus-emulator:
+    container_name: servicebus-emulator
+    hostname: servicebus-emulator
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    pull_policy: always
+    volumes:
+      - ./ServiceBus-Emulator/Config/Config.json:/ServiceBus_Emulator/ConfigFiles/Config.json
+    ports:
+      - "5672:5672"
+    environment:
+      SQL_SERVER: sqledge
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-YourStrong@Passw0rd}
+      ACCEPT_EULA: ${ACCEPT_EULA:-Y}
+    depends_on:
+      - sqledge
+    networks:
+      foundatio:
+        aliases:
+          - servicebus-emulator
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5672 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  sqledge:
+    container_name: sqledge
+    hostname: sqledge
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    pull_policy: always
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-YourStrong@Passw0rd}
+      ACCEPT_EULA: ${ACCEPT_EULA:-Y}
+    networks:
+      foundatio:
+
+  ready:
+    image: andrewlock/wait-for-dependencies
+    command: servicebus-emulator:5672
+    depends_on:
+      - servicebus-emulator
+    networks:
+      foundatio:
+
+networks:
+  foundatio:
+    driver: bridge
