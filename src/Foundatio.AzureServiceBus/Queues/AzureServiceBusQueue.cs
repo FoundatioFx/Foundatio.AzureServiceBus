@@ -86,7 +86,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         if (QueueIsCreated)
             return;
 
-        using (await _lock.LockAsync().AnyContext())
+        using (await _lock.LockAsync(DisposedCancellationToken).AnyContext())
         {
             if (QueueIsCreated)
                 return;
