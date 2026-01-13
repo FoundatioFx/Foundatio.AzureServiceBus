@@ -51,8 +51,11 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         });
     }
 
-    public AzureServiceBusMessageBus(Builder<AzureServiceBusMessageBusOptionsBuilder, AzureServiceBusMessageBusOptions> config)
-        : this(config(new AzureServiceBusMessageBusOptionsBuilder()).Build()) { }
+    public AzureServiceBusMessageBus(
+        Builder<AzureServiceBusMessageBusOptionsBuilder, AzureServiceBusMessageBusOptions> config)
+        : this(config(new AzureServiceBusMessageBusOptionsBuilder()).Build())
+    {
+    }
 
     public ServiceBusClient Client => _client.Value;
     public ServiceBusAdministrationClient AdminClient => _adminClient.Value;
