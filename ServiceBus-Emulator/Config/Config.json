@@ -8,7 +8,7 @@
             "Name": "foundatio-test-queue",
             "Properties": {
               "LockDuration": "PT1M",
-              "MaxDeliveryCount": 10,
+              "MaxDeliveryCount": 5,
               "DefaultMessageTimeToLive": "PT1H",
               "DeadLetteringOnMessageExpiration": true
             }
@@ -25,7 +25,7 @@
                 "Name": "test-subscription",
                 "Properties": {
                   "LockDuration": "PT1M",
-                  "MaxDeliveryCount": 10,
+                  "MaxDeliveryCount": 5,
                   "DeadLetteringOnMessageExpiration": true
                 }
               }

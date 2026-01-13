@@ -6,6 +6,7 @@ using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using Foundatio.AsyncEx;
 using Foundatio.AzureServiceBus.Queues;
+using Foundatio.AzureServiceBus.Utility;
 using Foundatio.Extensions;
 using Foundatio.Serializer;
 using Microsoft.Extensions.Logging;
@@ -176,22 +177,58 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     {
         await EnsureQueueCreatedAsync().AnyContext();
 
-        int drained = 0;
-        while (true)
+        int totalDrained = 0;
+        int passes = 0;
+        const int maxPasses = 5;
+        const int maxWaitSeconds = 5;
+        var startTime = DateTime.UtcNow;
+
+        // Multiple passes to catch messages that may be in-flight or scheduled
+        // We wait up to maxWaitSeconds for scheduled messages to become available
+        while (passes < maxPasses && !DisposedCancellationToken.IsCancellationRequested)
         {
-            var messages = await _queueReceiver.ReceiveMessagesAsync(100, TimeSpan.FromMilliseconds(500)).AnyContext();
-            if (messages == null || messages.Count == 0)
+            int drained = 0;
+            while (!DisposedCancellationToken.IsCancellationRequested)
+            {
+                var messages = await _queueReceiver.ReceiveMessagesAsync(100, TimeSpan.FromSeconds(1), DisposedCancellationToken).AnyContext();
+                if (messages == null || messages.Count == 0)
+                    break;
+
+                foreach (var message in messages)
+                {
+                    if (DisposedCancellationToken.IsCancellationRequested)
+                        break;
+
+                    await _queueReceiver.CompleteMessageAsync(message, DisposedCancellationToken).AnyContext();
+                    drained++;
+                }
+            }
+
+            totalDrained += drained;
+            passes++;
+
+            // If we drained messages, continue draining
+            if (drained > 0)
+                continue;
+
+            // No messages found - check if we should wait for scheduled messages
+            var elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
+            if (elapsed >= maxWaitSeconds)
                 break;
 
-            foreach (var message in messages)
+            // Wait a bit for scheduled messages to become available
+            try
             {
-                await _queueReceiver.CompleteMessageAsync(message).AnyContext();
-                drained++;
+                await Task.Delay(500, DisposedCancellationToken).AnyContext();
+            }
+            catch (OperationCanceledException)
+            {
+                break;
             }
         }
 
-        if (drained > 0)
-            _logger.LogDebug("Drained {Count} messages from queue {QueueName}", drained, _options.Name);
+        if (totalDrained > 0)
+            _logger.LogDebug("Drained {Count} messages from queue {QueueName}", totalDrained, _options.Name);
     }
 
     protected override async Task<QueueStats> GetQueueStatsImplAsync()
@@ -416,7 +453,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             // Copy application properties (excluding SDK diagnostic properties)
             foreach (var prop in entry.UnderlyingMessage.ApplicationProperties)
             {
-                if (prop.Key != "Diagnostic-Id")
+                if (!ServiceBusMessageHelper.IsSdkDiagnosticProperty(prop.Key))
                     retryMessage.ApplicationProperties[prop.Key] = prop.Value;
             }
 

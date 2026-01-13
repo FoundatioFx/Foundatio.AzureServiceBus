@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using Foundatio.AsyncEx;
+using Foundatio.AzureServiceBus.Utility;
 using Foundatio.Extensions;
 using Foundatio.Serializer;
 using Microsoft.Extensions.Logging;
@@ -138,24 +139,13 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         foreach (var property in brokeredMessage.ApplicationProperties)
         {
             // Filter out Azure Service Bus SDK diagnostic properties that are automatically added
-            if (IsSdkDiagnosticProperty(property.Key))
+            if (ServiceBusMessageHelper.IsSdkDiagnosticProperty(property.Key))
                 continue;
 
             message.Properties[property.Key] = property.Value?.ToString();
         }
 
         return SendMessageToSubscribersAsync(message);
-    }
-
-    /// <summary>
-    /// Determines if the property is an SDK-added diagnostic property that should be filtered out.
-    /// Azure Service Bus SDK adds these for distributed tracing (e.g., Diagnostic-Id, traceparent, tracestate).
-    /// </summary>
-    private static bool IsSdkDiagnosticProperty(string propertyName)
-    {
-        return propertyName.StartsWith("Diagnostic-", StringComparison.OrdinalIgnoreCase) ||
-               propertyName.Equals("traceparent", StringComparison.OrdinalIgnoreCase) ||
-               propertyName.Equals("tracestate", StringComparison.OrdinalIgnoreCase);
     }
 
     private Task OnErrorAsync(ProcessErrorEventArgs args)
@@ -338,6 +328,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
         using (_lock.Lock())
         {
+            // Double-check after acquiring lock (another thread may have closed it)
             if (_topicSender == null)
                 return;
 
@@ -353,6 +344,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
         using (_lock.Lock())
         {
+            // Double-check after acquiring lock (another thread may have closed it)
             if (_subscriptionProcessor == null)
                 return;
 

@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using Azure.Messaging.ServiceBus;
+using Foundatio.AzureServiceBus.Utility;
 
 namespace Foundatio.Queues;
 
@@ -13,7 +14,7 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
     {
         if (message.ApplicationProperties is not null)
         {
-            foreach (var property in message.ApplicationProperties.Where(a => !IsSdkDiagnosticProperty(a.Key) && a.Key != "CorrelationId" && a.Key != "_attempts"))
+            foreach (var property in message.ApplicationProperties.Where(a => !ServiceBusMessageHelper.IsSdkDiagnosticProperty(a.Key) && a.Key != "CorrelationId" && a.Key != "_attempts"))
                 Properties.Add(property.Key, property.Value?.ToString());
         }
 
@@ -32,16 +33,5 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
 
         // Fall back to delivery count for normal abandon/retry
         return message.DeliveryCount;
-    }
-
-    /// <summary>
-    /// Determines if the property is an SDK-added diagnostic property that should be filtered out.
-    /// Azure Service Bus SDK adds these for distributed tracing (e.g., Diagnostic-Id, traceparent, tracestate).
-    /// </summary>
-    private static bool IsSdkDiagnosticProperty(string propertyName)
-    {
-        return propertyName.StartsWith("Diagnostic-", StringComparison.OrdinalIgnoreCase) ||
-               propertyName.Equals("traceparent", StringComparison.OrdinalIgnoreCase) ||
-               propertyName.Equals("tracestate", StringComparison.OrdinalIgnoreCase);
     }
 }
