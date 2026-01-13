@@ -4,6 +4,12 @@
     <File Path="build/common.props" />
     <File Path="README.md" />
   </Folder>
+  <Folder Name="/Samples/">
+    <Project Path="samples/Foundatio.AzureServiceBus.Enqueue/Foundatio.AzureServiceBus.Enqueue.csproj" />
+    <Project Path="samples/Foundatio.AzureServiceBus.Dequeue/Foundatio.AzureServiceBus.Dequeue.csproj" />
+    <Project Path="samples/Foundatio.AzureServiceBus.Publish/Foundatio.AzureServiceBus.Publish.csproj" />
+    <Project Path="samples/Foundatio.AzureServiceBus.Subscribe/Foundatio.AzureServiceBus.Subscribe.csproj" />
+  </Folder>
   <Folder Name="/Tests/">
     <Project Path="tests/Foundatio.AzureServiceBus.Tests/Foundatio.AzureServiceBus.Tests.csproj" />
   </Folder>

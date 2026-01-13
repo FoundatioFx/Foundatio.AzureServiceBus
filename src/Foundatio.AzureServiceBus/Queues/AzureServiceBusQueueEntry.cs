@@ -1,4 +1,3 @@
-using System;
 using System.Linq;
 using Azure.Messaging.ServiceBus;
 using Foundatio.AzureServiceBus.Utility;

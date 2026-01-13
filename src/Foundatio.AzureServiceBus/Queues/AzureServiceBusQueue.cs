@@ -48,7 +48,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         if (options.DuplicateDetectionHistoryTimeWindow.HasValue && (options.DuplicateDetectionHistoryTimeWindow < TimeSpan.FromSeconds(20.0) || options.DuplicateDetectionHistoryTimeWindow > TimeSpan.FromDays(7.0)))
             throw new ArgumentException("The minimum DuplicateDetectionHistoryTimeWindow duration is 20 seconds and maximum is 7 days.");
 
-        if (options.UserMetadata != null && options.UserMetadata.Length > 1024)
+        if (options.UserMetadata is { Length: > 1024 })
             throw new ArgumentException("Queue UserMetadata must be less than 1024 characters.");
 
         // Detect if using the Azure Service Bus Emulator
@@ -212,7 +212,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 continue;
 
             // No messages found - check if we should wait for scheduled messages
-            var elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
+            double elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
             if (elapsed >= maxWaitSeconds)
                 break;
 
