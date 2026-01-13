@@ -112,16 +112,14 @@ public class AzureServiceBusQueueOptionsBuilder<T> : SharedQueueOptionsBuilder<T
 {
     public AzureServiceBusQueueOptionsBuilder<T> ConnectionString(string connectionString)
     {
-        if (String.IsNullOrEmpty(connectionString))
-            throw new ArgumentNullException(nameof(connectionString));
+        ArgumentException.ThrowIfNullOrEmpty(connectionString);
         Target.ConnectionString = connectionString;
         return this;
     }
 
     public AzureServiceBusQueueOptionsBuilder<T> FullyQualifiedNamespace(string fullyQualifiedNamespace)
     {
-        if (String.IsNullOrEmpty(fullyQualifiedNamespace))
-            throw new ArgumentNullException(nameof(fullyQualifiedNamespace));
+        ArgumentException.ThrowIfNullOrEmpty(fullyQualifiedNamespace);
         Target.FullyQualifiedNamespace = fullyQualifiedNamespace;
         return this;
     }
