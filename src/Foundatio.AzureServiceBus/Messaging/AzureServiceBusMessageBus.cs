@@ -68,7 +68,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         if (!TopicIsCreated)
             await EnsureTopicCreatedAsync(cancellationToken).AnyContext();
 
-        using (await _lock.LockAsync().AnyContext())
+        using (await _lock.LockAsync(cancellationToken).AnyContext())
         {
             if (_subscriptionProcessor != null)
                 return;
@@ -171,7 +171,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         if (TopicIsCreated)
             return;
 
-        using (await _lock.LockAsync().AnyContext())
+        using (await _lock.LockAsync(cancellationToken).AnyContext())
         {
             if (TopicIsCreated)
                 return;
