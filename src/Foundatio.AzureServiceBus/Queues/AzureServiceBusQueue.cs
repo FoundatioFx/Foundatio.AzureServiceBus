@@ -13,14 +13,14 @@ using Microsoft.Extensions.Logging;
 
 namespace Foundatio.Queues;
 
-public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<T>>, IAsyncDisposable where T : class
+public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<T>> where T : class
 {
     private readonly AsyncLock _lock = new();
     private readonly Lazy<ServiceBusClient> _client;
     private readonly Lazy<ServiceBusAdministrationClient> _adminClient;
     private readonly bool _isEmulator;
-    private ServiceBusSender _queueSender;
-    private ServiceBusReceiver _queueReceiver;
+    private ServiceBusSender? _queueSender;
+    private ServiceBusReceiver? _queueReceiver;
 
     private long _enqueuedCount;
     private long _dequeuedCount;
@@ -77,10 +77,10 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
     public ServiceBusClient Client => _client.Value;
     public ServiceBusAdministrationClient AdminClient => _adminClient.Value;
-    public ServiceBusReceiver Receiver => _queueReceiver;
-    public ServiceBusSender Sender => _queueSender;
+    public ServiceBusReceiver? Receiver => _queueReceiver;
+    public ServiceBusSender? Sender => _queueSender;
 
-    private bool QueueIsCreated => _queueReceiver != null && _queueSender != null;
+    private bool QueueIsCreated => _queueReceiver is not null && _queueSender is not null;
 
     protected override async Task EnsureQueueCreatedAsync(CancellationToken cancellationToken = default)
     {
@@ -154,13 +154,13 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             await DrainQueueAsync().AnyContext();
         }
 
-        if (_queueSender != null)
+        if (_queueSender is not null)
         {
             await _queueSender.DisposeAsync().AnyContext();
             _queueSender = null;
         }
 
-        if (_queueReceiver != null)
+        if (_queueReceiver is not null)
         {
             await _queueReceiver.DisposeAsync().AnyContext();
             _queueReceiver = null;
@@ -190,7 +190,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             int drained = 0;
             while (!DisposedCancellationToken.IsCancellationRequested)
             {
-                var messages = await _queueReceiver.ReceiveMessagesAsync(100, TimeSpan.FromSeconds(1), DisposedCancellationToken).AnyContext();
+                var messages = await _queueReceiver!.ReceiveMessagesAsync(100, TimeSpan.FromSeconds(1), DisposedCancellationToken).AnyContext();
                 if (messages == null || messages.Count == 0)
                     break;
 
@@ -199,7 +199,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                     if (DisposedCancellationToken.IsCancellationRequested)
                         break;
 
-                    await _queueReceiver.CompleteMessageAsync(message, DisposedCancellationToken).AnyContext();
+                    await _queueReceiver!.CompleteMessageAsync(message, DisposedCancellationToken).AnyContext();
                     drained++;
                 }
             }
@@ -284,7 +284,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         throw new NotImplementedException();
     }
 
-    protected override async Task<string> EnqueueImplAsync(T data, QueueEntryOptions options)
+    protected override async Task<string?> EnqueueImplAsync(T data, QueueEntryOptions options)
     {
         if (!await OnEnqueuingAsync(data, options).AnyContext())
             return null;
@@ -312,12 +312,15 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         }
 
         _logger.LogTrace("Enqueuing message to queue {QueueName}", _options.Name);
-        await _queueSender.SendMessageAsync(message).AnyContext();
+        await _queueSender!.SendMessageAsync(message).AnyContext();
 
         var entry = new QueueEntry<T>(message.MessageId, message.CorrelationId, data, this, _timeProvider.GetUtcNow().UtcDateTime, 0);
 
         foreach (var property in message.ApplicationProperties)
-            entry.Properties.Add(property.Key, property.Value?.ToString());
+        {
+            if (property.Value?.ToString() is { } value)
+                entry.Properties.Add(property.Key, value);
+        }
 
         await OnEnqueuedAsync(entry).AnyContext();
 
@@ -326,7 +329,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     }
 
     // TODO: See if we can simplify this.
-    protected override async Task<IQueueEntry<T>> DequeueImplAsync(CancellationToken linkedCancellationToken)
+    protected override async Task<IQueueEntry<T>?> DequeueImplAsync(CancellationToken linkedCancellationToken)
     {
         // Calculate timeout based on cancellation state - like SQS pattern
         var timeout = linkedCancellationToken.IsCancellationRequested
@@ -336,13 +339,13 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         _logger.LogTrace("Checking for message in queue {QueueName}... IsCancellationRequested={IsCancellationRequested} ReadQueueTimeout={ReadQueueTimeout}",
             _options.Name, linkedCancellationToken.IsCancellationRequested, timeout);
 
-        ServiceBusReceivedMessage message = null;
+        ServiceBusReceivedMessage? message = null;
 
         // Initial receive attempt - try at least once even if cancellation is requested
         // This supports the pattern where TimeSpan.Zero is passed to mean "check once without waiting"
         try
         {
-            message = await _queueReceiver.ReceiveMessageAsync(timeout, CancellationToken.None).AnyContext();
+            message = await _queueReceiver!.ReceiveMessageAsync(timeout, CancellationToken.None).AnyContext();
         }
         catch (OperationCanceledException)
         {
@@ -388,7 +391,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         _logger.LogTrace("Received message {MessageId} from queue {QueueName} IsCancellationRequested={IsCancellationRequested}",
             message.MessageId, _options.Name, linkedCancellationToken.IsCancellationRequested);
 
-        T data;
+        T? data;
         try
         {
             data = _serializer.Deserialize<T>(message.Body.ToArray());
@@ -396,8 +399,12 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Error deserializing message {MessageId} (delivery {DeliveryCount}), abandoning for retry", message.MessageId, message.DeliveryCount);
+            data = null;
+        }
 
-            var poisonEntry = new AzureServiceBusQueueEntry<T>(message, null, this);
+        if (data is null)
+        {
+            var poisonEntry = new AzureServiceBusQueueEntry<T>(message, default!, this);
             await AbandonAsync(poisonEntry).AnyContext();
             return null;
         }
@@ -420,7 +427,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         _logger.LogDebug("Queue {QueueName} renew lock item: {QueueEntryId}", _options.Name, queueEntry.Id);
 
         var entry = ToQueueEntry(queueEntry);
-        await _queueReceiver.RenewMessageLockAsync(entry.UnderlyingMessage).AnyContext();
+        await _queueReceiver!.RenewMessageLockAsync(entry.UnderlyingMessage).AnyContext();
 
         await OnLockRenewedAsync(entry).AnyContext();
         _logger.LogTrace("Renew lock done: {QueueEntryId} MessageId={MessageId}", queueEntry.Id, entry.UnderlyingMessage.MessageId);
@@ -434,7 +441,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             throw new InvalidOperationException("Queue entry has already been completed or abandoned.");
 
         var entry = ToQueueEntry(queueEntry);
-        await _queueReceiver.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
+        await _queueReceiver!.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
 
         Interlocked.Increment(ref _completedCount);
         queueEntry.MarkCompleted();
@@ -486,13 +493,13 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 retryMessage.ApplicationProperties["_attempts"] = entry.Attempts;
 
                 // Complete the original message and schedule the retry
-                await _queueReceiver.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
-                await _queueSender.SendMessageAsync(retryMessage).AnyContext();
+                await _queueReceiver!.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
+                await _queueSender!.SendMessageAsync(retryMessage).AnyContext();
             }
             else
             {
                 // No retry delay - just abandon for immediate retry
-                await _queueReceiver.AbandonMessageAsync(entry.UnderlyingMessage).AnyContext();
+                await _queueReceiver!.AbandonMessageAsync(entry.UnderlyingMessage).AnyContext();
             }
         }
 
@@ -521,7 +528,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             {
                 _logger.LogTrace("WorkerLoop Signaled {QueueName}", _options.Name);
 
-                IQueueEntry<T> entry = null;
+                IQueueEntry<T>? entry = null;
                 try
                 {
                     entry = await DequeueImplAsync(linkedCancellationToken.Token).AnyContext();
@@ -604,6 +611,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
     public override void Dispose()
     {
+        // TODO: Improve Async Cleanup
         base.Dispose();
 
         if (_queueSender is not null)
@@ -624,33 +632,11 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         }
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        base.Dispose();
-
-        if (_queueSender is not null)
-        {
-            await _queueSender.DisposeAsync().AnyContext();
-            _queueSender = null;
-        }
-
-        if (_queueReceiver is not null)
-        {
-            await _queueReceiver.DisposeAsync().AnyContext();
-            _queueReceiver = null;
-        }
-
-        if (_client.IsValueCreated)
-        {
-            await _client.Value.DisposeAsync().AnyContext();
-        }
-    }
-
     private async Task DeadLetterMessageAsync(AzureServiceBusQueueEntry<T> entry)
     {
         _logger.LogInformation("Exceeded retry limit ({Attempts}/{Retries}), moving message {QueueEntryId} to dead letter", entry.Attempts, _options.Retries, entry.Id);
 
-        await _queueReceiver.DeadLetterMessageAsync(entry.UnderlyingMessage, "MaxRetriesExceeded",
+        await _queueReceiver!.DeadLetterMessageAsync(entry.UnderlyingMessage, "MaxRetriesExceeded",
             $"Exceeded retry limit ({entry.Attempts} attempts, {_options.Retries} retries)").AnyContext();
     }
 

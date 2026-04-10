@@ -37,7 +37,7 @@ rootCommand.SetAction(async parseResult =>
                               Environment.GetEnvironmentVariable("AZURE_SERVICEBUS_CONNECTION_STRING") ??
                               EmulatorConnectionString;
 
-    string queueName = parseResult.GetValue(queueOption);
+    string queueName = parseResult.GetValue(queueOption)!;
     int count = parseResult.GetValue(countOption);
 
     Console.WriteLine($"Using connection: {(connectionString == EmulatorConnectionString ? "Azure Service Bus Emulator" : "Custom connection string")}");
@@ -102,7 +102,7 @@ static async Task DequeueMessages(string connectionString, string queueName, int
                 processed++;
 
                 logger.LogInformation("Dequeued message {MessageId}: '{Message}' from '{Source}' at {Timestamp}",
-                    entry.Id, entry.Value.Message, entry.Value.Source, entry.Value.Timestamp);
+                    entry.Id, entry.Value?.Message, entry.Value?.Source, entry.Value?.Timestamp);
 
                 logger.LogInformation("  CorrelationId: '{CorrelationId}'", entry.CorrelationId ?? "<none>");
 

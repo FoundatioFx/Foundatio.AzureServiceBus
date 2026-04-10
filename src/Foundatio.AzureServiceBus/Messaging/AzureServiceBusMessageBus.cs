@@ -11,14 +11,14 @@ using Microsoft.Extensions.Logging;
 
 namespace Foundatio.Messaging;
 
-public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBusOptions>, IAsyncDisposable
+public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBusOptions>
 {
     private readonly AsyncLock _lock = new();
     private readonly Lazy<ServiceBusClient> _client;
     private readonly Lazy<ServiceBusAdministrationClient> _adminClient;
     private readonly bool _isEmulator;
-    private ServiceBusSender _topicSender;
-    private ServiceBusProcessor _subscriptionProcessor;
+    private ServiceBusSender? _topicSender;
+    private ServiceBusProcessor? _subscriptionProcessor;
     private readonly string _subscriptionName;
 
     public AzureServiceBusMessageBus(AzureServiceBusMessageBusOptions options) : base(options)
@@ -63,7 +63,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
     protected override async Task EnsureTopicSubscriptionAsync(CancellationToken cancellationToken)
     {
-        if (_subscriptionProcessor != null)
+        if (_subscriptionProcessor is not null)
             return;
 
         if (!TopicIsCreated)
@@ -71,7 +71,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
         using (await _lock.LockAsync(cancellationToken).AnyContext())
         {
-            if (_subscriptionProcessor != null)
+            if (_subscriptionProcessor is not null)
                 return;
 
             _logger.LogTrace("Ensuring subscription {SubscriptionName} exists on topic {Topic}", _subscriptionName, _options.Topic);
@@ -145,7 +145,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
             if (ServiceBusMessageHelper.IsSdkDiagnosticProperty(property.Key))
                 continue;
 
-            message.Properties[property.Key] = property.Value?.ToString();
+            message.Properties[property.Key] = property.Value?.ToString() ?? String.Empty;
         }
 
         try
@@ -171,7 +171,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         return Task.CompletedTask;
     }
 
-    private bool TopicIsCreated => _topicSender != null;
+    private bool TopicIsCreated => _topicSender is not null;
 
     protected override async Task EnsureTopicCreatedAsync(CancellationToken cancellationToken)
     {
@@ -244,7 +244,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
         // Wrap only the transport call in resilience policy
         await _resiliencePolicy.ExecuteAsync(async _ =>
-            await _topicSender.SendMessageAsync(serviceBusMessage, cancellationToken),
+            await _topicSender!.SendMessageAsync(serviceBusMessage, cancellationToken),
             cancellationToken).AnyContext();
     }
 
@@ -330,9 +330,10 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
     public override void Dispose()
     {
+        // TODO: Improve Async Cleanup
         base.Dispose();
-        CloseTopicSenderAsync().GetAwaiter().GetResult();
-        CloseSubscriptionProcessorAsync().GetAwaiter().GetResult();
+        CloseTopicSender();
+        CloseSubscriptionProcessor();
 
         if (_client.IsValueCreated)
         {
@@ -340,45 +341,33 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         }
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        base.Dispose();
-        await CloseTopicSenderAsync().AnyContext();
-        await CloseSubscriptionProcessorAsync().AnyContext();
-
-        if (_client.IsValueCreated)
-        {
-            await _client.Value.DisposeAsync().AnyContext();
-        }
-    }
-
-    private async Task CloseTopicSenderAsync()
+    private void CloseTopicSender()
     {
         if (_topicSender is null)
             return;
 
-        using (await _lock.LockAsync().AnyContext())
+        using (_lock.Lock())
         {
             if (_topicSender is null)
                 return;
 
-            await _topicSender.DisposeAsync().AnyContext();
+            _topicSender.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _topicSender = null;
         }
     }
 
-    private async Task CloseSubscriptionProcessorAsync()
+    private void CloseSubscriptionProcessor()
     {
         if (_subscriptionProcessor is null)
             return;
 
-        using (await _lock.LockAsync().AnyContext())
+        using (_lock.Lock())
         {
             if (_subscriptionProcessor is null)
                 return;
 
-            await _subscriptionProcessor.StopProcessingAsync().AnyContext();
-            await _subscriptionProcessor.DisposeAsync().AnyContext();
+            _subscriptionProcessor.StopProcessingAsync().GetAwaiter().GetResult();
+            _subscriptionProcessor.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _subscriptionProcessor = null;
         }
     }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Azure.Core;
 using Azure.Messaging.ServiceBus.Administration;
 
@@ -9,18 +9,18 @@ public class AzureServiceBusQueueOptions<T> : SharedQueueOptions<T> where T : cl
     /// <summary>
     /// The connection string to the Azure Service Bus namespace.
     /// </summary>
-    public string ConnectionString { get; set; }
+    public string? ConnectionString { get; set; }
 
     /// <summary>
     /// The fully qualified Service Bus namespace to use for Azure Identity authentication.
     /// Example: "yournamespace.servicebus.windows.net"
     /// </summary>
-    public string FullyQualifiedNamespace { get; set; }
+    public string? FullyQualifiedNamespace { get; set; }
 
     /// <summary>
     /// The token credential to use for Azure Identity authentication.
     /// </summary>
-    public TokenCredential Credential { get; set; }
+    public TokenCredential? Credential { get; set; }
 
     /// <summary>
     /// Whether the queue can be created if it doesn't exist.
@@ -85,12 +85,12 @@ public class AzureServiceBusQueueOptions<T> : SharedQueueOptions<T> where T : cl
     /// <summary>
     /// Returns the path to the recipient to which the message is forwarded.
     /// </summary>
-    public string ForwardTo { get; set; }
+    public string? ForwardTo { get; set; }
 
     /// <summary>
     /// Returns the path to the recipient to which the dead lettered message is forwarded.
     /// </summary>
-    public string ForwardDeadLetteredMessagesTo { get; set; }
+    public string? ForwardDeadLetteredMessagesTo { get; set; }
 
     /// <summary>
     /// Returns true if the queue is to be partitioned across multiple message brokers.
@@ -100,7 +100,7 @@ public class AzureServiceBusQueueOptions<T> : SharedQueueOptions<T> where T : cl
     /// <summary>
     /// Returns user metadata.
     /// </summary>
-    public string UserMetadata { get; set; }
+    public string? UserMetadata { get; set; }
 
     /// <summary>
     /// The function to calculate retry delay based on the attempt number.
