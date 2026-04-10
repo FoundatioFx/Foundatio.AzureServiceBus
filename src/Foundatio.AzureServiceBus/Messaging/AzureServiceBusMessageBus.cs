@@ -145,7 +145,8 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
             if (ServiceBusMessageHelper.IsSdkDiagnosticProperty(property.Key))
                 continue;
 
-            message.Properties[property.Key] = property.Value?.ToString() ?? String.Empty;
+            if (property.Value?.ToString() is { } value)
+                message.Properties[property.Key] = value;
         }
 
         try
