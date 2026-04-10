@@ -37,8 +37,9 @@ rootCommand.SetAction(async parseResult =>
                               Environment.GetEnvironmentVariable("AZURE_SERVICEBUS_CONNECTION_STRING") ??
                               EmulatorConnectionString;
 
-    string queueName = parseResult.GetValue(queueOption)!;
+    string? queueName = parseResult.GetValue(queueOption);
     int count = parseResult.GetValue(countOption);
+    ArgumentException.ThrowIfNullOrEmpty(queueName);
 
     Console.WriteLine($"Using connection: {(connectionString == EmulatorConnectionString ? "Azure Service Bus Emulator" : "Custom connection string")}");
     Console.WriteLine($"Queue: {queueName}");

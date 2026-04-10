@@ -105,14 +105,9 @@ static async Task EnqueueMessages(string connectionString, string queueName, str
 
         var entryOptions = new QueueEntryOptions
         {
-            CorrelationId = correlationId
+            CorrelationId = correlationId,
+            Properties = queueProperties
         };
-
-        if (queueProperties.Count > 0)
-        {
-            foreach (var property in queueProperties)
-                entryOptions.Properties[property.Key] = property.Value;
-        }
 
         string? messageId = await queue.EnqueueAsync(sampleMessage, entryOptions);
 

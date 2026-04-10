@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Foundatio.Messaging;
 
-public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBusOptions>
+public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBusOptions>, IAsyncDisposable
 {
     private readonly AsyncLock _lock = new();
     private readonly Lazy<ServiceBusClient> _client;
@@ -342,6 +342,18 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         }
     }
 
+    public async ValueTask DisposeAsync()
+    {
+        base.Dispose();
+        await CloseTopicSenderAsync().AnyContext();
+        await CloseSubscriptionProcessorAsync().AnyContext();
+
+        if (_client.IsValueCreated)
+        {
+            await _client.Value.DisposeAsync().AnyContext();
+        }
+    }
+
     private void CloseTopicSender()
     {
         if (_topicSender is null)
@@ -353,6 +365,21 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
                 return;
 
             _topicSender.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _topicSender = null;
+        }
+    }
+
+    private async Task CloseTopicSenderAsync()
+    {
+        if (_topicSender is null)
+            return;
+
+        using (await _lock.LockAsync().AnyContext())
+        {
+            if (_topicSender is null)
+                return;
+
+            await _topicSender.DisposeAsync().AnyContext();
             _topicSender = null;
         }
     }
@@ -369,6 +396,22 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
             _subscriptionProcessor.StopProcessingAsync().GetAwaiter().GetResult();
             _subscriptionProcessor.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _subscriptionProcessor = null;
+        }
+    }
+
+    private async Task CloseSubscriptionProcessorAsync()
+    {
+        if (_subscriptionProcessor is null)
+            return;
+
+        using (await _lock.LockAsync().AnyContext())
+        {
+            if (_subscriptionProcessor is null)
+                return;
+
+            await _subscriptionProcessor.StopProcessingAsync().AnyContext();
+            await _subscriptionProcessor.DisposeAsync().AnyContext();
             _subscriptionProcessor = null;
         }
     }
