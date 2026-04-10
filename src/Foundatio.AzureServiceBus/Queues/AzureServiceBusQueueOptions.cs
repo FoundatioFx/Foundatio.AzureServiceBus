@@ -112,7 +112,7 @@ public class AzureServiceBusQueueOptionsBuilder<T> : SharedQueueOptionsBuilder<T
 {
     public AzureServiceBusQueueOptionsBuilder<T> ConnectionString(string connectionString)
     {
-        ArgumentException.ThrowIfNullOrEmpty(connectionString);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         Target.ConnectionString = connectionString;
         return this;
     }
