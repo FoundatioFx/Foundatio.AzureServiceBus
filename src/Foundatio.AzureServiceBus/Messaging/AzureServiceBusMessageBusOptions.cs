@@ -166,23 +166,22 @@ public class AzureServiceBusMessageBusOptionsBuilder : SharedMessageBusOptionsBu
 {
     public AzureServiceBusMessageBusOptionsBuilder ConnectionString(string connectionString)
     {
-        if (String.IsNullOrEmpty(connectionString))
-            throw new ArgumentNullException(nameof(connectionString));
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         Target.ConnectionString = connectionString;
         return this;
     }
 
     public AzureServiceBusMessageBusOptionsBuilder FullyQualifiedNamespace(string fullyQualifiedNamespace)
     {
-        if (String.IsNullOrEmpty(fullyQualifiedNamespace))
-            throw new ArgumentNullException(nameof(fullyQualifiedNamespace));
+        ArgumentException.ThrowIfNullOrWhiteSpace(fullyQualifiedNamespace);
         Target.FullyQualifiedNamespace = fullyQualifiedNamespace;
         return this;
     }
 
     public AzureServiceBusMessageBusOptionsBuilder Credential(TokenCredential credential)
     {
-        Target.Credential = credential ?? throw new ArgumentNullException(nameof(credential));
+        ArgumentNullException.ThrowIfNull(credential);
+        Target.Credential = credential;
         return this;
     }
 
@@ -264,13 +263,15 @@ public class AzureServiceBusMessageBusOptionsBuilder : SharedMessageBusOptionsBu
 
     public AzureServiceBusMessageBusOptionsBuilder TopicUserMetadata(string topicUserMetadata)
     {
-        Target.TopicUserMetadata = topicUserMetadata ?? throw new ArgumentNullException(nameof(topicUserMetadata));
+        ArgumentNullException.ThrowIfNull(topicUserMetadata);
+        Target.TopicUserMetadata = topicUserMetadata;
         return this;
     }
 
     public AzureServiceBusMessageBusOptionsBuilder SubscriptionName(string subscriptionName)
     {
-        Target.SubscriptionName = subscriptionName ?? throw new ArgumentNullException(nameof(subscriptionName));
+        ArgumentNullException.ThrowIfNull(subscriptionName);
+        Target.SubscriptionName = subscriptionName;
         return this;
     }
 
@@ -330,19 +331,22 @@ public class AzureServiceBusMessageBusOptionsBuilder : SharedMessageBusOptionsBu
 
     public AzureServiceBusMessageBusOptionsBuilder SubscriptionForwardTo(string subscriptionForwardTo)
     {
-        Target.SubscriptionForwardTo = subscriptionForwardTo ?? throw new ArgumentNullException(nameof(subscriptionForwardTo));
+        ArgumentNullException.ThrowIfNull(subscriptionForwardTo);
+        Target.SubscriptionForwardTo = subscriptionForwardTo;
         return this;
     }
 
     public AzureServiceBusMessageBusOptionsBuilder SubscriptionForwardDeadLetteredMessagesTo(string subscriptionForwardDeadLetteredMessagesTo)
     {
-        Target.SubscriptionForwardDeadLetteredMessagesTo = subscriptionForwardDeadLetteredMessagesTo ?? throw new ArgumentNullException(nameof(subscriptionForwardDeadLetteredMessagesTo));
+        ArgumentNullException.ThrowIfNull(subscriptionForwardDeadLetteredMessagesTo);
+        Target.SubscriptionForwardDeadLetteredMessagesTo = subscriptionForwardDeadLetteredMessagesTo;
         return this;
     }
 
     public AzureServiceBusMessageBusOptionsBuilder SubscriptionUserMetadata(string subscriptionUserMetadata)
     {
-        Target.SubscriptionUserMetadata = subscriptionUserMetadata ?? throw new ArgumentNullException(nameof(subscriptionUserMetadata));
+        ArgumentNullException.ThrowIfNull(subscriptionUserMetadata);
+        Target.SubscriptionUserMetadata = subscriptionUserMetadata;
         return this;
     }
 

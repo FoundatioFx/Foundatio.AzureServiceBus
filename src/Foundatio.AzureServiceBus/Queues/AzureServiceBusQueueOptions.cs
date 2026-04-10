@@ -119,14 +119,15 @@ public class AzureServiceBusQueueOptionsBuilder<T> : SharedQueueOptionsBuilder<T
 
     public AzureServiceBusQueueOptionsBuilder<T> FullyQualifiedNamespace(string fullyQualifiedNamespace)
     {
-        ArgumentException.ThrowIfNullOrEmpty(fullyQualifiedNamespace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fullyQualifiedNamespace);
         Target.FullyQualifiedNamespace = fullyQualifiedNamespace;
         return this;
     }
 
     public AzureServiceBusQueueOptionsBuilder<T> Credential(TokenCredential credential)
     {
-        Target.Credential = credential ?? throw new ArgumentNullException(nameof(credential));
+        ArgumentNullException.ThrowIfNull(credential);
+        Target.Credential = credential;
         return this;
     }
 
@@ -158,7 +159,8 @@ public class AzureServiceBusQueueOptionsBuilder<T> : SharedQueueOptionsBuilder<T
 
     public AzureServiceBusQueueOptionsBuilder<T> RetryDelay(Func<int, TimeSpan> retryDelay)
     {
-        Target.RetryDelay = retryDelay ?? throw new ArgumentNullException(nameof(retryDelay));
+        ArgumentNullException.ThrowIfNull(retryDelay);
+        Target.RetryDelay = retryDelay;
         return this;
     }
 
@@ -218,13 +220,15 @@ public class AzureServiceBusQueueOptionsBuilder<T> : SharedQueueOptionsBuilder<T
 
     public AzureServiceBusQueueOptionsBuilder<T> ForwardTo(string forwardTo)
     {
-        Target.ForwardTo = forwardTo ?? throw new ArgumentNullException(nameof(forwardTo));
+        ArgumentNullException.ThrowIfNull(forwardTo);
+        Target.ForwardTo = forwardTo;
         return this;
     }
 
     public AzureServiceBusQueueOptionsBuilder<T> ForwardDeadLetteredMessagesTo(string forwardDeadLetteredMessagesTo)
     {
-        Target.ForwardDeadLetteredMessagesTo = forwardDeadLetteredMessagesTo ?? throw new ArgumentNullException(nameof(forwardDeadLetteredMessagesTo));
+        ArgumentNullException.ThrowIfNull(forwardDeadLetteredMessagesTo);
+        Target.ForwardDeadLetteredMessagesTo = forwardDeadLetteredMessagesTo;
         return this;
     }
 
@@ -236,7 +240,8 @@ public class AzureServiceBusQueueOptionsBuilder<T> : SharedQueueOptionsBuilder<T
 
     public AzureServiceBusQueueOptionsBuilder<T> UserMetadata(string userMetadata)
     {
-        Target.UserMetadata = userMetadata ?? throw new ArgumentNullException(nameof(userMetadata));
+        ArgumentNullException.ThrowIfNull(userMetadata);
+        Target.UserMetadata = userMetadata;
         return this;
     }
 }

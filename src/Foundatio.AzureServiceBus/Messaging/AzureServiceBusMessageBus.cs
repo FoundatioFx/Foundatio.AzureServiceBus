@@ -359,15 +359,17 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
     private void CloseTopicSender()
     {
-        if (_topicSender is null)
+        var sender = _topicSender;
+        if (sender is null)
             return;
 
         using (_lock.Lock())
         {
-            if (_topicSender is null)
+            sender = _topicSender;
+            if (sender is null)
                 return;
 
-            _topicSender.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            sender.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _topicSender = null;
         }
     }
@@ -389,16 +391,18 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
     private void CloseSubscriptionProcessor()
     {
-        if (_subscriptionProcessor is null)
+        var processor = _subscriptionProcessor;
+        if (processor is null)
             return;
 
         using (_lock.Lock())
         {
-            if (_subscriptionProcessor is null)
+            processor = _subscriptionProcessor;
+            if (processor is null)
                 return;
 
-            _subscriptionProcessor.StopProcessingAsync().GetAwaiter().GetResult();
-            _subscriptionProcessor.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            processor.StopProcessingAsync().GetAwaiter().GetResult();
+            processor.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _subscriptionProcessor = null;
         }
     }
