@@ -334,10 +334,9 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
     public override void Dispose()
     {
-        // TODO: Improve Async Cleanup
         base.Dispose();
-        CloseTopicSender();
-        CloseSubscriptionProcessor();
+        CloseTopicSenderAsync().GetAwaiter().GetResult();
+        CloseSubscriptionProcessorAsync().GetAwaiter().GetResult();
 
         if (_client.IsValueCreated)
         {
@@ -357,23 +356,6 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         }
     }
 
-    private void CloseTopicSender()
-    {
-        var sender = _topicSender;
-        if (sender is null)
-            return;
-
-        using (_lock.Lock())
-        {
-            sender = _topicSender;
-            if (sender is null)
-                return;
-
-            sender.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            _topicSender = null;
-        }
-    }
-
     private async Task CloseTopicSenderAsync()
     {
         if (_topicSender is null)
@@ -386,24 +368,6 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
             await _topicSender.DisposeAsync().AnyContext();
             _topicSender = null;
-        }
-    }
-
-    private void CloseSubscriptionProcessor()
-    {
-        var processor = _subscriptionProcessor;
-        if (processor is null)
-            return;
-
-        using (_lock.Lock())
-        {
-            processor = _subscriptionProcessor;
-            if (processor is null)
-                return;
-
-            processor.StopProcessingAsync().GetAwaiter().GetResult();
-            processor.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            _subscriptionProcessor = null;
         }
     }
 

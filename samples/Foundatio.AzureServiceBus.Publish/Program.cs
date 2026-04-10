@@ -55,9 +55,15 @@ rootCommand.SetAction(async parseResult =>
                               Environment.GetEnvironmentVariable("AZURE_SERVICEBUS_CONNECTION_STRING") ??
                               EmulatorConnectionString;
 
-    string topic = parseResult.GetValue(topicOption)!;
-    string eventType = parseResult.GetValue(eventTypeOption)!;
-    string data = parseResult.GetValue(dataOption)!;
+    string? topic = parseResult.GetValue(topicOption);
+    ArgumentException.ThrowIfNullOrWhiteSpace(topic);
+
+    string? eventType = parseResult.GetValue(eventTypeOption);
+    ArgumentException.ThrowIfNullOrWhiteSpace(eventType);
+
+    string? data = parseResult.GetValue(dataOption);
+    ArgumentException.ThrowIfNullOrWhiteSpace(data);
+
     string? correlationId = parseResult.GetValue(correlationIdOption);
     int count = parseResult.GetValue(countOption);
 

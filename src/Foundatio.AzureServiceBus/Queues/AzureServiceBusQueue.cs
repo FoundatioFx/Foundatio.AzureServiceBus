@@ -405,18 +405,20 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             message.MessageId, _options.Name, linkedCancellationToken.IsCancellationRequested);
 
         T? data;
+        Exception? deserializeException = null;
         try
         {
             data = _serializer.Deserialize<T>(message.Body.ToArray());
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Error deserializing message {MessageId} (delivery {DeliveryCount}), abandoning for retry", message.MessageId, message.DeliveryCount);
+            deserializeException = ex;
             data = null;
         }
 
         if (data is null)
         {
+            _logger.LogWarning(deserializeException, "Error deserializing message {MessageId} (delivery {DeliveryCount}), abandoning for retry", message.MessageId, message.DeliveryCount);
             var poisonEntry = new AzureServiceBusQueueEntry<T>(message, default!, this);
             await AbandonAsync(poisonEntry).AnyContext();
             return null;

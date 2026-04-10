@@ -57,10 +57,14 @@ rootCommand.SetAction(async parseResult =>
                               Environment.GetEnvironmentVariable("AZURE_SERVICEBUS_CONNECTION_STRING") ??
                               EmulatorConnectionString;
 
-    string queueName = parseResult.GetValue(queueOption)!;
-    string message = parseResult.GetValue(messageOption)!;
+    string? queueName = parseResult.GetValue(queueOption);
+    ArgumentException.ThrowIfNullOrWhiteSpace(queueName);
+
+    string? message = parseResult.GetValue(messageOption);
+    ArgumentException.ThrowIfNullOrWhiteSpace(message);
+
     string? correlationId = parseResult.GetValue(correlationIdOption);
-    string[] properties = parseResult.GetValue(propertiesOption)!;
+    string[] properties = parseResult.GetValue(propertiesOption) ?? [];
     int count = parseResult.GetValue(countOption);
 
     Console.WriteLine($"Using connection: {(connectionString == EmulatorConnectionString ? "Azure Service Bus Emulator" : "Custom connection string")}");
