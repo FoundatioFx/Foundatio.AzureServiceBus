@@ -85,7 +85,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
                     if (!subscriptionExists)
                     {
                         if (!_options.CanCreateTopic)
-                            throw new InvalidOperationException($"Subscription {_subscriptionName} does not exist on topic {_options.Topic} and CanCreateTopic is false.");
+                            throw new MessageBusException($"Subscription {_subscriptionName} does not exist on topic {_options.Topic} and CanCreateTopic is false.");
 
                         await _adminClient.Value.CreateSubscriptionAsync(CreateSubscriptionOptions(), cancellationToken).AnyContext();
                         _logger.LogDebug("Created subscription {SubscriptionName} on topic {Topic}", _subscriptionName, _options.Topic);
@@ -195,7 +195,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
                     if (!topicExists)
                     {
                         if (!_options.CanCreateTopic)
-                            throw new InvalidOperationException($"Topic {_options.Topic} does not exist and CanCreateTopic is false.");
+                            throw new MessageBusException($"Topic {_options.Topic} does not exist and CanCreateTopic is false.");
 
                         await _adminClient.Value.CreateTopicAsync(CreateTopicOptions(), cancellationToken).AnyContext();
                         _logger.LogDebug("Created topic {Topic}", _options.Topic);
@@ -247,6 +247,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         if (sender is null)
             throw new MessageBusException("Cannot publish: topic sender is not initialized or has been closed.");
 
+        // Wrap only the transport call in resilience policy
         await _resiliencePolicy.ExecuteAsync(async _ =>
             await sender.SendMessageAsync(serviceBusMessage, cancellationToken),
             cancellationToken).AnyContext();
