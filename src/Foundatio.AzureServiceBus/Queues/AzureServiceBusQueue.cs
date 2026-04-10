@@ -371,7 +371,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
             try
             {
-                message = await _queueReceiver.ReceiveMessageAsync(_options.ReadQueueTimeout, linkedCancellationToken).AnyContext();
+                message = await _queueReceiver!.ReceiveMessageAsync(_options.ReadQueueTimeout, linkedCancellationToken).AnyContext();
             }
             catch (OperationCanceledException)
             {
