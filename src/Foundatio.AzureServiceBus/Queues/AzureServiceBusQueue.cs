@@ -177,10 +177,6 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     {
         await EnsureQueueCreatedAsync().AnyContext();
 
-        var receiver = _queueReceiver;
-        if (receiver is null)
-            throw new QueueException("Cannot drain: queue receiver is not initialized.");
-
         int totalDrained = 0;
         int passes = 0;
         const int maxPasses = 5;
@@ -194,7 +190,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             int drained = 0;
             while (!DisposedCancellationToken.IsCancellationRequested)
             {
-                var messages = await receiver.ReceiveMessagesAsync(100, TimeSpan.FromSeconds(1), DisposedCancellationToken).AnyContext();
+                var messages = await _queueReceiver!.ReceiveMessagesAsync(100, TimeSpan.FromSeconds(1), DisposedCancellationToken).AnyContext();
                 if (messages == null || messages.Count == 0)
                     break;
 
@@ -203,7 +199,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                     if (DisposedCancellationToken.IsCancellationRequested)
                         break;
 
-                    await receiver.CompleteMessageAsync(message, DisposedCancellationToken).AnyContext();
+                    await _queueReceiver!.CompleteMessageAsync(message, DisposedCancellationToken).AnyContext();
                     drained++;
                 }
             }
@@ -317,11 +313,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         _logger.LogTrace("Enqueuing message to queue {QueueName}", _options.Name);
 
-        var sender = _queueSender;
-        if (sender is null)
-            throw new QueueException("Cannot enqueue: queue sender is not initialized.");
-
-        await sender.SendMessageAsync(message).AnyContext();
+        await _queueSender!.SendMessageAsync(message).AnyContext();
 
         var entry = new QueueEntry<T>(message.MessageId, message.CorrelationId, data, this, _timeProvider.GetUtcNow().UtcDateTime, 0);
 
@@ -350,15 +342,11 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         ServiceBusReceivedMessage? message = null;
 
-        var receiver = _queueReceiver;
-        if (receiver is null)
-            throw new QueueException("Cannot dequeue: queue receiver is not initialized.");
-
         // Initial receive attempt - try at least once even if cancellation is requested
         // This supports the pattern where TimeSpan.Zero is passed to mean "check once without waiting"
         try
         {
-            message = await receiver.ReceiveMessageAsync(timeout, CancellationToken.None).AnyContext();
+            message = await _queueReceiver!.ReceiveMessageAsync(timeout, CancellationToken.None).AnyContext();
         }
         catch (OperationCanceledException)
         {
@@ -384,7 +372,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
             try
             {
-                message = await receiver.ReceiveMessageAsync(_options.ReadQueueTimeout, linkedCancellationToken).AnyContext();
+                message = await _queueReceiver!.ReceiveMessageAsync(_options.ReadQueueTimeout, linkedCancellationToken).AnyContext();
             }
             catch (OperationCanceledException)
             {
@@ -442,11 +430,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         var entry = ToQueueEntry(queueEntry);
 
-        var receiver = _queueReceiver;
-        if (receiver is null)
-            throw new QueueException("Cannot renew lock: queue receiver is not initialized.");
-
-        await receiver.RenewMessageLockAsync(entry.UnderlyingMessage).AnyContext();
+        await _queueReceiver!.RenewMessageLockAsync(entry.UnderlyingMessage).AnyContext();
 
         await OnLockRenewedAsync(entry).AnyContext();
         _logger.LogTrace("Renew lock done: {QueueEntryId} MessageId={MessageId}", queueEntry.Id, entry.UnderlyingMessage.MessageId);
@@ -461,11 +445,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         var entry = ToQueueEntry(queueEntry);
 
-        var receiver = _queueReceiver;
-        if (receiver is null)
-            throw new QueueException("Cannot complete: queue receiver is not initialized.");
-
-        await receiver.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
+        await _queueReceiver!.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
 
         Interlocked.Increment(ref _completedCount);
         queueEntry.MarkCompleted();
@@ -481,10 +461,6 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             throw new QueueException("Queue entry has already been completed or abandoned.");
 
         var entry = ToQueueEntry(queueEntry);
-
-        var receiver = _queueReceiver;
-        if (receiver is null)
-            throw new QueueException("Cannot abandon: queue receiver is not initialized.");
 
         if (entry.Attempts > _options.Retries)
         {
@@ -521,18 +497,14 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 retryMessage.ApplicationProperties["_attempts"] = entry.Attempts;
 
                 // Complete the original message and schedule the retry
-                await receiver.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
+                await _queueReceiver!.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
 
-                var retrySender = _queueSender;
-                if (retrySender is null)
-                    throw new QueueException("Cannot schedule retry: queue sender is not initialized.");
-
-                await retrySender.SendMessageAsync(retryMessage).AnyContext();
+                await _queueSender!.SendMessageAsync(retryMessage).AnyContext();
             }
             else
             {
                 // No retry delay - just abandon for immediate retry
-                await receiver.AbandonMessageAsync(entry.UnderlyingMessage).AnyContext();
+                await _queueReceiver!.AbandonMessageAsync(entry.UnderlyingMessage).AnyContext();
             }
         }
 
@@ -689,11 +661,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     {
         _logger.LogInformation("Exceeded retry limit ({Attempts}/{Retries}), moving message {QueueEntryId} to dead letter", entry.Attempts, _options.Retries, entry.Id);
 
-        var receiver = _queueReceiver;
-        if (receiver is null)
-            throw new QueueException("Cannot dead-letter: queue receiver is not initialized.");
-
-        await receiver.DeadLetterMessageAsync(entry.UnderlyingMessage, "MaxRetriesExceeded",
+        await _queueReceiver!.DeadLetterMessageAsync(entry.UnderlyingMessage, "MaxRetriesExceeded",
             $"Exceeded retry limit ({entry.Attempts} attempts, {_options.Retries} retries)").AnyContext();
     }
 

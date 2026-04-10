@@ -243,13 +243,9 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
             _logger.LogTrace("Message Publish: {MessageType}", messageType);
         }
 
-        var sender = _topicSender;
-        if (sender is null)
-            throw new MessageBusException("Cannot publish: topic sender is not initialized or has been closed.");
-
         // Wrap only the transport call in resilience policy
         await _resiliencePolicy.ExecuteAsync(async _ =>
-            await sender.SendMessageAsync(serviceBusMessage, cancellationToken),
+            await _topicSender!.SendMessageAsync(serviceBusMessage, cancellationToken),
             cancellationToken).AnyContext();
     }
 
