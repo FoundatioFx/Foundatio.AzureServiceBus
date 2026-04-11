@@ -109,9 +109,11 @@ static async Task EnqueueMessages(string connectionString, string queueName, str
 
         var entryOptions = new QueueEntryOptions
         {
-            CorrelationId = correlationId,
-            Properties = queueProperties
+            CorrelationId = correlationId
         };
+
+        if (queueProperties.Count > 0)
+            entryOptions.Properties = queueProperties;
 
         string? messageId = await queue.EnqueueAsync(sampleMessage, entryOptions);
 
