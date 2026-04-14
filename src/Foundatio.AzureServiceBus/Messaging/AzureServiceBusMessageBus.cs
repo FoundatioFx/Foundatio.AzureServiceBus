@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Foundatio.Messaging;
 
-public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBusOptions>, IAsyncDisposable
+public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBusOptions>
 {
     private readonly AsyncLock _lock = new();
     private readonly Lazy<ServiceBusClient> _client;
@@ -141,7 +141,6 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
         foreach (var property in brokeredMessage.ApplicationProperties)
         {
-            // Filter out Azure Service Bus SDK diagnostic properties that are automatically added
             if (ServiceBusMessageHelper.IsSdkDiagnosticProperty(property.Key))
                 continue;
 
@@ -153,15 +152,15 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         {
             await SendMessageToSubscribersAsync(message).AnyContext();
         }
+        catch (OperationCanceledException)
+        {
+            // Bus is disposing — abandon message so it can be redelivered
+        }
         catch (MessageBusException)
         {
-            // SendMessageToSubscribersAsync already logged the error
-            // Azure Service Bus SDK will handle retry/dead-letter based on MaxDeliveryCount
         }
         catch (Exception ex)
         {
-            // Catch any other unexpected exceptions for defensive purposes
-            // Azure Service Bus SDK will handle retry/dead-letter based on MaxDeliveryCount
             _logger.LogError(ex, "OnMessageAsync({MessageId}) Error in subscriber: {Message}", brokeredMessage.MessageId, ex.Message);
         }
     }
@@ -329,45 +328,11 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         return options;
     }
 
-    public override void Dispose()
-    {
-        base.Dispose();
-        Task.Run(() => CleanupAsync()).GetAwaiter().GetResult();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        base.Dispose();
-        await CleanupAsync().AnyContext();
-    }
-
-    private async Task CleanupAsync()
-    {
-        await CloseTopicSenderAsync().AnyContext();
-        await CloseSubscriptionProcessorAsync().AnyContext();
-
-        if (_client.IsValueCreated)
-        {
-            await _client.Value.DisposeAsync().AnyContext();
-        }
-    }
-
-    private async Task CloseTopicSenderAsync()
-    {
-        if (_topicSender is null)
-            return;
-
-        using (await _lock.LockAsync().AnyContext())
-        {
-            if (_topicSender is null)
-                return;
-
-            await _topicSender.DisposeAsync().AnyContext();
-            _topicSender = null;
-        }
-    }
-
-    private async Task CloseSubscriptionProcessorAsync()
+    /// <summary>
+    /// Gracefully stops the subscription processor so in-flight handlers can complete
+    /// while subscribers are still registered and the cancellation token is still active.
+    /// </summary>
+    protected override async Task ShutdownAsync()
     {
         if (_subscriptionProcessor is null)
             return;
@@ -378,8 +343,36 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
                 return;
 
             await _subscriptionProcessor.StopProcessingAsync().AnyContext();
-            await _subscriptionProcessor.DisposeAsync().AnyContext();
-            _subscriptionProcessor = null;
         }
+    }
+
+    protected override async Task CleanupAsync()
+    {
+        if (_subscriptionProcessor is not null)
+        {
+            using (await _lock.LockAsync().AnyContext())
+            {
+                if (_subscriptionProcessor is not null)
+                {
+                    await _subscriptionProcessor.DisposeAsync().AnyContext();
+                    _subscriptionProcessor = null;
+                }
+            }
+        }
+
+        if (_topicSender is not null)
+        {
+            using (await _lock.LockAsync().AnyContext())
+            {
+                if (_topicSender is not null)
+                {
+                    await _topicSender.DisposeAsync().AnyContext();
+                    _topicSender = null;
+                }
+            }
+        }
+
+        if (_client.IsValueCreated)
+            await _client.Value.DisposeAsync().AnyContext();
     }
 }
