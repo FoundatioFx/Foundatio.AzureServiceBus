@@ -141,6 +141,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
         foreach (var property in brokeredMessage.ApplicationProperties)
         {
+            // Filter out Azure Service Bus SDK diagnostic properties that are automatically added
             if (ServiceBusMessageHelper.IsSdkDiagnosticProperty(property.Key))
                 continue;
 
@@ -160,9 +161,13 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         }
         catch (MessageBusException)
         {
+            // SendMessageToSubscribersAsync already logged the error
+            // Azure Service Bus SDK will handle retry/dead-letter based on MaxDeliveryCount
         }
         catch (Exception ex)
         {
+            // Catch any other unexpected exceptions for defensive purposes
+            // Azure Service Bus SDK will handle retry/dead-letter based on MaxDeliveryCount
             _logger.LogError(ex, "OnMessageAsync({MessageId}) Error in subscriber: {Message}", brokeredMessage.MessageId, ex.Message);
         }
     }
@@ -334,8 +339,11 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
     /// Gracefully stops the subscription processor so in-flight handlers can complete
     /// while subscribers are still registered and the cancellation token is still active.
     /// </summary>
-    protected override async Task ShutdownAsync()
+    protected override async Task RemoveTopicSubscriptionAsync()
     {
+        if (_subscriptionProcessor is null)
+            return;
+
         using (await _lock.LockAsync().AnyContext())
         {
             if (_subscriptionProcessor is null)
