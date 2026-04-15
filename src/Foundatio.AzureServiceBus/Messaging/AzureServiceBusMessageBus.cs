@@ -152,9 +152,11 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         {
             await SendMessageToSubscribersAsync(message).AnyContext();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (IsDisposed)
         {
-            // Bus is disposing — abandon message so it can be redelivered
+            // Rethrow so the Azure SDK does not auto-complete (which would lose the message).
+            // The message will be abandoned and redelivered after lock expiry.
+            throw;
         }
         catch (MessageBusException)
         {
@@ -334,9 +336,6 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
     /// </summary>
     protected override async Task ShutdownAsync()
     {
-        if (_subscriptionProcessor is null)
-            return;
-
         using (await _lock.LockAsync().AnyContext())
         {
             if (_subscriptionProcessor is null)
@@ -348,27 +347,21 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
     protected override async Task CleanupAsync()
     {
-        if (_subscriptionProcessor is not null)
+        using (await _lock.LockAsync().AnyContext())
         {
-            using (await _lock.LockAsync().AnyContext())
+            if (_subscriptionProcessor is not null)
             {
-                if (_subscriptionProcessor is not null)
-                {
-                    await _subscriptionProcessor.DisposeAsync().AnyContext();
-                    _subscriptionProcessor = null;
-                }
+                await _subscriptionProcessor.DisposeAsync().AnyContext();
+                _subscriptionProcessor = null;
             }
         }
 
-        if (_topicSender is not null)
+        using (await _lock.LockAsync().AnyContext())
         {
-            using (await _lock.LockAsync().AnyContext())
+            if (_topicSender is not null)
             {
-                if (_topicSender is not null)
-                {
-                    await _topicSender.DisposeAsync().AnyContext();
-                    _topicSender = null;
-                }
+                await _topicSender.DisposeAsync().AnyContext();
+                _topicSender = null;
             }
         }
 
