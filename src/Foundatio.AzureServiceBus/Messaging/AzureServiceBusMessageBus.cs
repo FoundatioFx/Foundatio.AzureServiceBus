@@ -355,21 +355,27 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
 
     protected override async Task CleanupAsync()
     {
-        using (await _lock.LockAsync().AnyContext())
+        if (_subscriptionProcessor is not null)
         {
-            if (_subscriptionProcessor is not null)
+            using (await _lock.LockAsync().AnyContext())
             {
-                await _subscriptionProcessor.DisposeAsync().AnyContext();
-                _subscriptionProcessor = null;
+                if (_subscriptionProcessor is not null)
+                {
+                    await _subscriptionProcessor.DisposeAsync().AnyContext();
+                    _subscriptionProcessor = null;
+                }
             }
         }
 
-        using (await _lock.LockAsync().AnyContext())
+        if (_topicSender is not null)
         {
-            if (_topicSender is not null)
+            using (await _lock.LockAsync().AnyContext())
             {
-                await _topicSender.DisposeAsync().AnyContext();
-                _topicSender = null;
+                if (_topicSender is not null)
+                {
+                    await _topicSender.DisposeAsync().AnyContext();
+                    _topicSender = null;
+                }
             }
         }
 
