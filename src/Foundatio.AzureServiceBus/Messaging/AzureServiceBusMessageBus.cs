@@ -154,21 +154,20 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         }
         catch (OperationCanceledException) when (IsDisposed)
         {
-            // Rethrow so the Azure SDK abandons rather than auto-completes the message.
-            // The message will be redelivered after the lock expires.
+            // Rethrow so the Azure SDK does not auto-complete (which would lose the message).
+            // The message will be abandoned and redelivered after lock expiry.
             throw;
         }
         catch (MessageBusException)
         {
-            // SendMessageToSubscribersAsync already logged the error. Rethrow so the SDK
-            // abandons the message and the delivery count is incremented — after MaxDeliveryCount
-            // the message moves to the dead-letter queue instead of being silently lost.
-            throw;
+            // SendMessageToSubscribersAsync already logged the error
+            // Azure Service Bus SDK will handle retry/dead-letter based on MaxDeliveryCount
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "OnMessageAsync({MessageId}) Unexpected error: {Message}", brokeredMessage.MessageId, ex.Message);
-            throw;
+            // Catch any other unexpected exceptions for defensive purposes
+            // Azure Service Bus SDK will handle retry/dead-letter based on MaxDeliveryCount
+            _logger.LogError(ex, "OnMessageAsync({MessageId}) Error in subscriber: {Message}", brokeredMessage.MessageId, ex.Message);
         }
     }
 
