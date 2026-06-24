@@ -130,8 +130,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
             .Property("MessageId", brokeredMessage.MessageId));
 
         _logger.LogTrace("OnMessageAsync({MessageId})", brokeredMessage.MessageId);
-
-        var message = new Message(brokeredMessage.Body.ToArray(), DeserializeMessageBody)
+        var message = new Message(brokeredMessage.Body.ToMemory(), DeserializeMessageBody)
         {
             Type = brokeredMessage.ContentType,
             ClrType = GetMappedMessageType(brokeredMessage.ContentType),
@@ -155,20 +154,21 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         }
         catch (OperationCanceledException) when (IsDisposed)
         {
-            // Rethrow so the Azure SDK does not auto-complete (which would lose the message).
-            // The message will be abandoned and redelivered after lock expiry.
+            // Rethrow so the Azure SDK abandons rather than auto-completes the message.
+            // The message will be redelivered after the lock expires.
             throw;
         }
         catch (MessageBusException)
         {
-            // SendMessageToSubscribersAsync already logged the error
-            // Azure Service Bus SDK will handle retry/dead-letter based on MaxDeliveryCount
+            // SendMessageToSubscribersAsync already logged the error. Rethrow so the SDK
+            // abandons the message and the delivery count is incremented — after MaxDeliveryCount
+            // the message moves to the dead-letter queue instead of being silently lost.
+            throw;
         }
         catch (Exception ex)
         {
-            // Catch any other unexpected exceptions for defensive purposes
-            // Azure Service Bus SDK will handle retry/dead-letter based on MaxDeliveryCount
-            _logger.LogError(ex, "OnMessageAsync({MessageId}) Error in subscriber: {Message}", brokeredMessage.MessageId, ex.Message);
+            _logger.LogError(ex, "OnMessageAsync({MessageId}) Unexpected error: {Message}", brokeredMessage.MessageId, ex.Message);
+            throw;
         }
     }
 
