@@ -256,22 +256,6 @@ public class AzureServiceBusQueueTests : QueueTestBase
     }
 
     [Fact]
-    public async Task DequeueAsync_WithRequiresSession_ThrowsNotSupportedExceptionAsync()
-    {
-        // Arrange
-        using var queue = new AzureServiceBusQueue<SimpleWorkItem>(o => o
-            .ConnectionString("Endpoint=sb://localhost:5672/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=dummy;UseDevelopmentEmulator=true")
-            .Name("foundatio-session-queue")
-            .RequiresSession(true)
-            .MetricsPollingInterval(TimeSpan.Zero)
-            .LoggerFactory(Log));
-
-        // Act & Assert
-        await Assert.ThrowsAsync<NotSupportedException>(() => queue.DequeueAsync(TimeSpan.FromMilliseconds(100)));
-        await Assert.ThrowsAsync<NotSupportedException>(() => queue.StartWorkingAsync((_, _) => Task.CompletedTask, false, TestCancellationToken));
-    }
-
-    [Fact]
     public override async Task DequeueAsync_WithPoisonMessage_MovesToDeadletterAsync()
     {
         if (!_isEmulator)
@@ -339,6 +323,12 @@ public class AzureServiceBusQueueTests : QueueTestBase
     public override Task DuplicateDetection_WithNullIdentifier_AcceptsAllItemsAsync()
     {
         return base.DuplicateDetection_WithNullIdentifier_AcceptsAllItemsAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithEmptyGroupId_EnqueuesWithoutGroupAsync()
+    {
+        return base.EnqueueAsync_WithEmptyGroupId_EnqueuesWithoutGroupAsync();
     }
 
     [Fact]
