@@ -1,3 +1,5 @@
+using System;
+using System.Globalization;
 using System.Linq;
 using Azure.Messaging.ServiceBus;
 using Foundatio.AzureServiceBus.Utility;
@@ -15,7 +17,7 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
         {
             foreach (var property in message.ApplicationProperties.Where(a => !ServiceBusMessageHelper.IsSdkDiagnosticProperty(a.Key) && a.Key != "CorrelationId" && a.Key != "_attempts"))
             {
-                if (property.Value?.ToString() is { } propValue)
+                if (property.Value is not null && Convert.ToString(property.Value, CultureInfo.InvariantCulture) is { } propValue)
                     Properties.Add(property.Key, propValue);
             }
         }
