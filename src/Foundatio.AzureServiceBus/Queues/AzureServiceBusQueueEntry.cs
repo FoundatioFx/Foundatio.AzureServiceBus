@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Azure.Messaging.ServiceBus;
 using Foundatio.AzureServiceBus.Utility;
@@ -21,6 +22,7 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
         }
 
         UnderlyingMessage = message;
+        GroupId = String.IsNullOrEmpty(message.SessionId) ? null : message.SessionId;
     }
 
     /// <summary>
