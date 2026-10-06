@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using Azure.Messaging.ServiceBus;
@@ -144,7 +145,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
             if (ServiceBusMessageHelper.IsSdkDiagnosticProperty(property.Key))
                 continue;
 
-            if (property.Value?.ToString() is { } value)
+            if (property.Value is not null && Convert.ToString(property.Value, CultureInfo.InvariantCulture) is { } value)
                 message.Properties[property.Key] = value;
         }
 
