@@ -27,6 +27,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     private long _completedCount;
     private long _abandonedCount;
     private long _workerErrorCount;
+    private static readonly TimeSpan MinWorkerErrorDelay = TimeSpan.FromSeconds(1);
 
     public AzureServiceBusQueue(AzureServiceBusQueueOptions<T> options) : base(options)
     {
@@ -495,7 +496,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 // Create a new message with same content for scheduled retry
                 var retryMessage = new ServiceBusMessage(entry.UnderlyingMessage.Body)
                 {
-                    MessageId = entry.UnderlyingMessage.MessageId,
+                    MessageId = _options.RequiresDuplicateDetection is true ? Guid.NewGuid().ToString("N") : entry.UnderlyingMessage.MessageId,
                     CorrelationId = entry.UnderlyingMessage.CorrelationId,
                     ScheduledEnqueueTime = DateTimeOffset.UtcNow.Add(retryDelay),
                     SessionId = entry.UnderlyingMessage.SessionId,
@@ -514,10 +515,10 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 // Store attempt count for next dequeue
                 retryMessage.ApplicationProperties["_attempts"] = entry.Attempts;
 
-                // Complete the original message and schedule the retry
-                await _queueReceiver!.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
-
+                // Schedule the retry before completing the original so a failed send cannot lose the message.
                 await _queueSender!.SendMessageAsync(retryMessage).AnyContext();
+
+                await _queueReceiver!.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
             }
             else
             {
@@ -556,7 +557,17 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 {
                     entry = await DequeueImplAsync(linkedCancellationToken.Token).AnyContext();
                 }
-                catch (OperationCanceledException) { }
+                catch (OperationCanceledException) when (linkedCancellationToken.IsCancellationRequested) { }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref _workerErrorCount);
+                    _logger.LogError(ex, "Error on Dequeue: {Message}", ex.Message);
+                    try
+                    {
+                        await _timeProvider.Delay(_options.DequeueInterval > MinWorkerErrorDelay ? _options.DequeueInterval : MinWorkerErrorDelay, linkedCancellationToken.Token).AnyContext();
+                    }
+                    catch (OperationCanceledException) { }
+                }
 
                 if (linkedCancellationToken.IsCancellationRequested || entry == null)
                     continue;
@@ -574,7 +585,16 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                     _logger.LogError(ex, "Worker error: {Message}", ex.Message);
 
                     if (!entry.IsAbandoned && !entry.IsCompleted && !linkedCancellationToken.IsCancellationRequested)
-                        await entry.AbandonAsync().AnyContext();
+                    {
+                        try
+                        {
+                            await entry.AbandonAsync().AnyContext();
+                        }
+                        catch (Exception abandonEx)
+                        {
+                            _logger.LogError(abandonEx, "Worker error abandoning queue entry: {Message}", abandonEx.Message);
+                        }
+                    }
                 }
             }
 

@@ -250,6 +250,12 @@ public class AzureServiceBusQueueTests : QueueTestBase
     }
 
     [Fact]
+    public override Task AbandonAsync_WithGroupIdAndRetryDelay_PreservesGroupIdOnRetryAsync()
+    {
+        return base.AbandonAsync_WithGroupIdAndRetryDelay_PreservesGroupIdOnRetryAsync();
+    }
+
+    [Fact]
     public override Task DequeueAsync_WithDispose_AutoAbandonsEntryAsync()
     {
         return base.DequeueAsync_WithDispose_AutoAbandonsEntryAsync();
@@ -323,6 +329,12 @@ public class AzureServiceBusQueueTests : QueueTestBase
     public override Task DuplicateDetection_WithNullIdentifier_AcceptsAllItemsAsync()
     {
         return base.DuplicateDetection_WithNullIdentifier_AcceptsAllItemsAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WhenEnqueuingHandlerClearsGroupId_EnqueuesWithoutGroupAsync()
+    {
+        return base.EnqueueAsync_WhenEnqueuingHandlerClearsGroupId_EnqueuesWithoutGroupAsync();
     }
 
     [Fact]
@@ -427,6 +439,12 @@ public class AzureServiceBusQueueTests : QueueTestBase
         {
             await CleanupQueueAsync(queue);
         }
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithReusedOptions_DoesNotChangeCallerOptionsAsync()
+    {
+        return base.EnqueueAsync_WithReusedOptions_DoesNotChangeCallerOptionsAsync();
     }
 
     [Fact]
