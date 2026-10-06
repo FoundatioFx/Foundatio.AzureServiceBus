@@ -80,8 +80,6 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     public ServiceBusReceiver? Receiver => _queueReceiver;
     public ServiceBusSender? Sender => _queueSender;
 
-    protected override bool SupportsGroupId => true;
-
     private bool QueueIsCreated => _queueReceiver is not null && _queueSender is not null;
 
     protected override async Task EnsureQueueCreatedAsync(CancellationToken cancellationToken = default)

@@ -332,6 +332,33 @@ public class AzureServiceBusQueueTests : QueueTestBase
     }
 
     [Fact]
+    public async Task EnqueueAsync_WithGroupId_DoesNotClaimGroupedDeliveryAsync()
+    {
+        // Arrange: the queue is not session-enabled and cannot receive from sessions, so GroupId cannot affect delivery
+        using var queue = GetQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            await queue.DeleteQueueAsync();
+            await AssertEmptyQueueAsync(queue);
+
+            // Act
+            await queue.EnqueueAsync(new SimpleWorkItem { Data = "no-grouped-delivery" }, new QueueEntryOptions { GroupId = "tenant-123" });
+
+            // Assert
+            Assert.Contains(Log.LogEntries, e => e.LogLevel == LogLevel.Debug && e.Message.Contains("delivery order or fairness"));
+            var entry = await queue.DequeueAsync(TimeSpan.FromSeconds(5));
+            Assert.NotNull(entry);
+            await entry.CompleteAsync();
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+    [Fact]
     public override Task EnqueueAsync_WithGroupId_RoundTripsGroupIdAsync()
     {
         return base.EnqueueAsync_WithGroupId_RoundTripsGroupIdAsync();
