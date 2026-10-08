@@ -27,7 +27,6 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     private long _completedCount;
     private long _abandonedCount;
     private long _workerErrorCount;
-    private static readonly TimeSpan MinWorkerErrorDelay = TimeSpan.FromSeconds(1);
 
     public AzureServiceBusQueue(AzureServiceBusQueueOptions<T> options) : base(options)
     {
@@ -496,13 +495,10 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 // Create a new message with same content for scheduled retry
                 var retryMessage = new ServiceBusMessage(entry.UnderlyingMessage.Body)
                 {
-                    MessageId = _options.RequiresDuplicateDetection is true ? Guid.NewGuid().ToString("N") : entry.UnderlyingMessage.MessageId,
+                    MessageId = entry.UnderlyingMessage.MessageId,
                     CorrelationId = entry.UnderlyingMessage.CorrelationId,
                     ScheduledEnqueueTime = DateTimeOffset.UtcNow.Add(retryDelay),
-                    SessionId = entry.UnderlyingMessage.SessionId,
-                    PartitionKey = entry.UnderlyingMessage.PartitionKey,
-                    Subject = entry.UnderlyingMessage.Subject,
-                    ContentType = entry.UnderlyingMessage.ContentType
+                    SessionId = entry.UnderlyingMessage.SessionId
                 };
 
                 // Copy application properties (excluding SDK diagnostic properties)
@@ -515,7 +511,8 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 // Store attempt count for next dequeue
                 retryMessage.ApplicationProperties["_attempts"] = entry.Attempts;
 
-                // Schedule the retry before completing the original so a failed send cannot lose the message.
+                // Send the retry before completing the original: a failed send cannot lose the message, and a failed
+                // complete redelivers it, which is the documented at-least-once Service Bus contract.
                 await _queueSender!.SendMessageAsync(retryMessage).AnyContext();
 
                 await _queueReceiver!.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
@@ -557,17 +554,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 {
                     entry = await DequeueImplAsync(linkedCancellationToken.Token).AnyContext();
                 }
-                catch (OperationCanceledException) when (linkedCancellationToken.IsCancellationRequested) { }
-                catch (Exception ex)
-                {
-                    Interlocked.Increment(ref _workerErrorCount);
-                    _logger.LogError(ex, "Error on Dequeue: {Message}", ex.Message);
-                    try
-                    {
-                        await _timeProvider.Delay(_options.DequeueInterval > MinWorkerErrorDelay ? _options.DequeueInterval : MinWorkerErrorDelay, linkedCancellationToken.Token).AnyContext();
-                    }
-                    catch (OperationCanceledException) { }
-                }
+                catch (OperationCanceledException) { }
 
                 if (linkedCancellationToken.IsCancellationRequested || entry == null)
                     continue;
@@ -585,16 +572,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                     _logger.LogError(ex, "Worker error: {Message}", ex.Message);
 
                     if (!entry.IsAbandoned && !entry.IsCompleted && !linkedCancellationToken.IsCancellationRequested)
-                    {
-                        try
-                        {
-                            await entry.AbandonAsync().AnyContext();
-                        }
-                        catch (Exception abandonEx)
-                        {
-                            _logger.LogError(abandonEx, "Worker error abandoning queue entry: {Message}", abandonEx.Message);
-                        }
-                    }
+                        await entry.AbandonAsync().AnyContext();
                 }
             }
 
