@@ -26,7 +26,6 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     private long _dequeuedCount;
     private long _completedCount;
     private long _abandonedCount;
-    private long _workerErrorCount;
 
     public AzureServiceBusQueue(AzureServiceBusQueueOptions<T> options) : base(options)
     {
@@ -176,7 +175,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         _dequeuedCount = 0;
         _completedCount = 0;
         _abandonedCount = 0;
-        _workerErrorCount = 0;
+        ResetWorkerErrorCount();
     }
 
     private async Task DrainQueueAsync()
@@ -249,7 +248,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 Dequeued = _dequeuedCount,
                 Completed = _completedCount,
                 Abandoned = _abandonedCount,
-                Errors = _workerErrorCount,
+                Errors = WorkerErrorCount,
                 Timeouts = 0
             };
 
@@ -265,7 +264,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 Dequeued = _dequeuedCount,
                 Completed = _completedCount,
                 Abandoned = _abandonedCount,
-                Errors = _workerErrorCount,
+                Errors = WorkerErrorCount,
                 Timeouts = 0
             };
         }
@@ -280,7 +279,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             Dequeued = _dequeuedCount,
             Completed = _completedCount,
             Abandoned = _abandonedCount,
-            Errors = _workerErrorCount,
+            Errors = WorkerErrorCount,
             Timeouts = 0
         };
     }
@@ -536,48 +535,8 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
     protected override void StartWorkingImpl(Func<IQueueEntry<T>, CancellationToken, Task> handler, bool autoComplete, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(handler);
         ThrowIfSessionsRequired();
-
-        var linkedCancellationToken = GetLinkedDisposableCancellationTokenSource(cancellationToken);
-
-        Task.Run(async () =>
-        {
-            _logger.LogTrace("WorkerLoop Start {QueueName}", _options.Name);
-
-            while (!linkedCancellationToken.IsCancellationRequested)
-            {
-                _logger.LogTrace("WorkerLoop Signaled {QueueName}", _options.Name);
-
-                IQueueEntry<T>? entry = null;
-                try
-                {
-                    entry = await DequeueImplAsync(linkedCancellationToken.Token).AnyContext();
-                }
-                catch (OperationCanceledException) { }
-
-                if (linkedCancellationToken.IsCancellationRequested || entry == null)
-                    continue;
-
-                try
-                {
-                    await handler(entry, linkedCancellationToken.Token).AnyContext();
-
-                    if (autoComplete && !entry.IsAbandoned && !entry.IsCompleted && !linkedCancellationToken.IsCancellationRequested)
-                        await entry.CompleteAsync().AnyContext();
-                }
-                catch (Exception ex)
-                {
-                    Interlocked.Increment(ref _workerErrorCount);
-                    _logger.LogError(ex, "Worker error: {Message}", ex.Message);
-
-                    if (!entry.IsAbandoned && !entry.IsCompleted && !linkedCancellationToken.IsCancellationRequested)
-                        await entry.AbandonAsync().AnyContext();
-                }
-            }
-
-            _logger.LogTrace("Worker exiting: {QueueName} IsCancellationRequested={IsCancellationRequested}", _options.Name, linkedCancellationToken.IsCancellationRequested);
-        }, linkedCancellationToken.Token).ContinueWith(_ => linkedCancellationToken.Dispose());
+        _ = StartWorker(handler, autoComplete, cancellationToken);
     }
 
     private void ThrowIfSessionsRequired()
