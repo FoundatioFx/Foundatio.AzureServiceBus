@@ -307,6 +307,8 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         if (options is AzureServiceBusQueueEntryOptions asbOptions && !String.IsNullOrEmpty(asbOptions.SessionId))
             message.SessionId = asbOptions.SessionId;
+        else if (!String.IsNullOrEmpty(options.GroupId))
+            message.SessionId = options.GroupId;
 
         if (options.DeliveryDelay.HasValue && options.DeliveryDelay.Value > TimeSpan.Zero)
             message.ScheduledEnqueueTime = DateTimeOffset.UtcNow.Add(options.DeliveryDelay.Value);
@@ -321,7 +323,10 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         await _queueSender!.SendMessageAsync(message).AnyContext();
 
-        var entry = new QueueEntry<T>(message.MessageId, message.CorrelationId, data, this, _timeProvider.GetUtcNow().UtcDateTime, 0);
+        var entry = new QueueEntry<T>(message.MessageId, message.CorrelationId, data, this, _timeProvider.GetUtcNow().UtcDateTime, 0)
+        {
+            GroupId = String.IsNullOrEmpty(message.SessionId) ? null : message.SessionId
+        };
 
         foreach (var property in message.ApplicationProperties)
         {
@@ -338,6 +343,8 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     // TODO: See if we can simplify this.
     protected override async Task<IQueueEntry<T>?> DequeueImplAsync(CancellationToken linkedCancellationToken)
     {
+        ThrowIfSessionsRequired();
+
         // Calculate timeout based on cancellation state - like SQS pattern
         var timeout = linkedCancellationToken.IsCancellationRequested
             ? TimeSpan.FromMilliseconds(100)
@@ -490,7 +497,8 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 {
                     MessageId = entry.UnderlyingMessage.MessageId,
                     CorrelationId = entry.UnderlyingMessage.CorrelationId,
-                    ScheduledEnqueueTime = DateTimeOffset.UtcNow.Add(retryDelay)
+                    ScheduledEnqueueTime = DateTimeOffset.UtcNow.Add(retryDelay),
+                    SessionId = entry.UnderlyingMessage.SessionId
                 };
 
                 // Copy application properties (excluding SDK diagnostic properties)
@@ -503,10 +511,11 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 // Store attempt count for next dequeue
                 retryMessage.ApplicationProperties["_attempts"] = entry.Attempts;
 
-                // Complete the original message and schedule the retry
-                await _queueReceiver!.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
-
+                // Send the retry before completing the original: a failed send cannot lose the message, and a failed
+                // complete redelivers it, which is the documented at-least-once Service Bus contract.
                 await _queueSender!.SendMessageAsync(retryMessage).AnyContext();
+
+                await _queueReceiver!.CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
             }
             else
             {
@@ -528,6 +537,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     protected override void StartWorkingImpl(Func<IQueueEntry<T>, CancellationToken, Task> handler, bool autoComplete, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        ThrowIfSessionsRequired();
 
         var linkedCancellationToken = GetLinkedDisposableCancellationTokenSource(cancellationToken);
 
@@ -568,6 +578,12 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
             _logger.LogTrace("Worker exiting: {QueueName} IsCancellationRequested={IsCancellationRequested}", _options.Name, linkedCancellationToken.IsCancellationRequested);
         }, linkedCancellationToken.Token).ContinueWith(_ => linkedCancellationToken.Dispose());
+    }
+
+    private void ThrowIfSessionsRequired()
+    {
+        if (_options.RequiresSession == true)
+            throw new NotSupportedException("Session-enabled queues are not supported for receiving by AzureServiceBusQueue; sending with SessionId works.");
     }
 
     private CreateQueueOptions CreateQueueOptions()

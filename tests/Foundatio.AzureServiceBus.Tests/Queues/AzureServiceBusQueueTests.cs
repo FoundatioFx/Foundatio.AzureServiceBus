@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using Foundatio.AzureServiceBus.Queues;
 using Foundatio.Queues;
 using Foundatio.Serializer;
 using Foundatio.Tests.Queue;
@@ -243,6 +244,18 @@ public class AzureServiceBusQueueTests : QueueTestBase
     }
 
     [Fact]
+    public override Task AbandonAsync_WithGroupId_PreservesGroupIdOnRetryAsync()
+    {
+        return base.AbandonAsync_WithGroupId_PreservesGroupIdOnRetryAsync();
+    }
+
+    [Fact]
+    public override Task AbandonAsync_WithGroupIdAndRetryDelay_PreservesGroupIdOnRetryAsync()
+    {
+        return base.AbandonAsync_WithGroupIdAndRetryDelay_PreservesGroupIdOnRetryAsync();
+    }
+
+    [Fact]
     public override Task DequeueAsync_WithDispose_AutoAbandonsEntryAsync()
     {
         return base.DequeueAsync_WithDispose_AutoAbandonsEntryAsync();
@@ -319,9 +332,119 @@ public class AzureServiceBusQueueTests : QueueTestBase
     }
 
     [Fact]
+    public override Task EnqueueAsync_WhenEnqueuingHandlerClearsGroupId_EnqueuesWithoutGroupAsync()
+    {
+        return base.EnqueueAsync_WhenEnqueuingHandlerClearsGroupId_EnqueuesWithoutGroupAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithEmptyGroupId_EnqueuesWithoutGroupAsync()
+    {
+        return base.EnqueueAsync_WithEmptyGroupId_EnqueuesWithoutGroupAsync();
+    }
+
+    [Fact]
+    public async Task EnqueueAsync_WithGroupId_DoesNotClaimGroupedDeliveryAsync()
+    {
+        // Arrange: the queue is not session-enabled and cannot receive from sessions, so GroupId cannot affect delivery
+        using var queue = GetQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            await queue.DeleteQueueAsync();
+            await AssertEmptyQueueAsync(queue);
+
+            // Act
+            await queue.EnqueueAsync(new SimpleWorkItem { Data = "no-grouped-delivery" }, new QueueEntryOptions { GroupId = "tenant-123" });
+
+            // Assert
+            Assert.Contains(Log.LogEntries, e => e.LogLevel == LogLevel.Debug && e.Message.Contains("delivery order or fairness"));
+            var entry = await queue.DequeueAsync(TimeSpan.FromSeconds(5));
+            Assert.NotNull(entry);
+            await entry.CompleteAsync();
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+    [Fact]
+    public override Task EnqueueAsync_WithGroupId_RoundTripsGroupIdAsync()
+    {
+        return base.EnqueueAsync_WithGroupId_RoundTripsGroupIdAsync();
+    }
+
+    [Fact]
+    public async Task EnqueueAsync_WithGroupId_SendsGroupIdAsSessionIdAsync()
+    {
+        // Arrange
+        using var queue = GetQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            await queue.DeleteQueueAsync();
+            await AssertEmptyQueueAsync(queue);
+
+            // Act
+            await queue.EnqueueAsync(new SimpleWorkItem { Data = "session-id-test" }, new QueueEntryOptions { GroupId = "tenant-123" });
+
+            // Assert
+            var entry = await queue.DequeueAsync(TimeSpan.FromSeconds(5));
+            var serviceBusEntry = Assert.IsType<AzureServiceBusQueueEntry<SimpleWorkItem>>(entry);
+            Assert.Equal("tenant-123", serviceBusEntry.UnderlyingMessage.SessionId);
+            Assert.Equal("tenant-123", serviceBusEntry.GroupId);
+            await serviceBusEntry.CompleteAsync();
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+
+    [Fact]
     public override Task EnqueueAsync_WithSerializationError_ThrowsAndLeavesQueueEmptyAsync()
     {
         return base.EnqueueAsync_WithSerializationError_ThrowsAndLeavesQueueEmptyAsync();
+    }
+
+    [Fact]
+    public async Task EnqueueAsync_WithSessionIdAndGroupId_UsesSessionIdAsync()
+    {
+        // Arrange
+        using var queue = GetQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            await queue.DeleteQueueAsync();
+            await AssertEmptyQueueAsync(queue);
+
+            // Act
+            await queue.EnqueueAsync(new SimpleWorkItem { Data = "session-id-test" },
+                new AzureServiceBusQueueEntryOptions { GroupId = "tenant-123", SessionId = "session-456" });
+
+            // Assert
+            var entry = await queue.DequeueAsync(TimeSpan.FromSeconds(5));
+            var serviceBusEntry = Assert.IsType<AzureServiceBusQueueEntry<SimpleWorkItem>>(entry);
+            Assert.Equal("session-456", serviceBusEntry.UnderlyingMessage.SessionId);
+            Assert.Equal("session-456", serviceBusEntry.GroupId);
+            await serviceBusEntry.CompleteAsync();
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithReusedOptions_DoesNotChangeCallerOptionsAsync()
+    {
+        return base.EnqueueAsync_WithReusedOptions_DoesNotChangeCallerOptionsAsync();
     }
 
     [Fact]
