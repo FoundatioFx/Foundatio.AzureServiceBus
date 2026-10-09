@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Azure.Messaging.ServiceBus;
@@ -21,6 +22,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     private readonly bool _isEmulator;
     private ServiceBusSender? _queueSender;
     private ServiceBusReceiver? _queueReceiver;
+    private bool _requiresDuplicateDetection;
 
     private long _enqueuedCount;
     private long _dequeuedCount;
@@ -105,18 +107,25 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                         if (!_options.CanCreateQueue)
                             throw new QueueException($"Queue {_options.Name} does not exist and CanCreateQueue is false.");
 
-                        await _adminClient.Value.CreateQueueAsync(CreateQueueOptions(), cancellationToken).AnyContext();
+                        var createdQueue = await _adminClient.Value.CreateQueueAsync(CreateQueueOptions(), cancellationToken).AnyContext();
+                        _requiresDuplicateDetection = createdQueue.Value.RequiresDuplicateDetection;
                         _logger.LogDebug("Created queue {QueueName}", _options.Name);
+                    }
+                    else
+                    {
+                        _requiresDuplicateDetection = await GetRequiresDuplicateDetectionAsync(cancellationToken).AnyContext();
                     }
                 }
                 catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.MessagingEntityAlreadyExists)
                 {
                     _logger.LogDebug(ex, "Queue {QueueName} already exists", _options.Name);
+                    _requiresDuplicateDetection = await GetRequiresDuplicateDetectionAsync(cancellationToken).AnyContext();
                 }
             }
             else
             {
                 _logger.LogDebug("Skipping queue existence check - using Azure Service Bus Emulator");
+                _requiresDuplicateDetection = _options.RequiresDuplicateDetection == true;
             }
 
             _queueSender = _client.Value.CreateSender(_options.Name);
@@ -297,10 +306,10 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         Interlocked.Increment(ref _enqueuedCount);
 
-        var message = new ServiceBusMessage(_serializer.SerializeToBytes(data));
-
-        if (!String.IsNullOrEmpty(options.UniqueId))
-            message.MessageId = options.UniqueId;
+        var message = new ServiceBusMessage(_serializer.SerializeToBytes(data))
+        {
+            MessageId = String.IsNullOrEmpty(options.UniqueId) ? Guid.NewGuid().ToString("N") : options.UniqueId
+        };
 
         if (!String.IsNullOrEmpty(options.CorrelationId))
             message.CorrelationId = options.CorrelationId;
@@ -492,24 +501,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 _logger.LogTrace("Scheduling retry for queue entry: {QueueEntryId} MessageId={MessageId} RetryDelay={RetryDelay} Attempts={Attempts}",
                     entry.Id, entry.UnderlyingMessage.MessageId, retryDelay, entry.Attempts);
 
-                // Create a new message with same content for scheduled retry
-                var retryMessage = new ServiceBusMessage(entry.UnderlyingMessage.Body)
-                {
-                    MessageId = entry.UnderlyingMessage.MessageId,
-                    CorrelationId = entry.UnderlyingMessage.CorrelationId,
-                    ScheduledEnqueueTime = DateTimeOffset.UtcNow.Add(retryDelay),
-                    SessionId = entry.UnderlyingMessage.SessionId
-                };
-
-                // Copy application properties (excluding SDK diagnostic properties)
-                foreach (var prop in entry.UnderlyingMessage.ApplicationProperties)
-                {
-                    if (!ServiceBusMessageHelper.IsSdkDiagnosticProperty(prop.Key))
-                        retryMessage.ApplicationProperties[prop.Key] = prop.Value;
-                }
-
-                // Store attempt count for next dequeue
-                retryMessage.ApplicationProperties["_attempts"] = entry.Attempts;
+                var retryMessage = CreateRetryMessage(entry, retryDelay);
 
                 // Send the retry before completing the original: a failed send cannot lose the message, and a failed
                 // complete redelivers it, which is the documented at-least-once Service Bus contract.
@@ -532,6 +524,35 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         await OnAbandonedAsync(queueEntry).AnyContext();
         _logger.LogTrace("Abandon complete: {QueueEntryId}", queueEntry.Id);
+    }
+
+    private async Task<bool> GetRequiresDuplicateDetectionAsync(CancellationToken cancellationToken)
+    {
+        var queue = await _adminClient.Value.GetQueueAsync(_options.Name, cancellationToken).AnyContext();
+        return queue.Value.RequiresDuplicateDetection;
+    }
+
+    private ServiceBusMessage CreateRetryMessage(AzureServiceBusQueueEntry<T> entry, TimeSpan retryDelay)
+    {
+        var retryMessage = new ServiceBusMessage(entry.UnderlyingMessage)
+        {
+            ScheduledEnqueueTime = DateTimeOffset.UtcNow.Add(retryDelay)
+        };
+
+        foreach (string key in retryMessage.ApplicationProperties.Keys.Where(ServiceBusMessageHelper.IsSdkDiagnosticProperty).ToList())
+            retryMessage.ApplicationProperties.Remove(key);
+
+        retryMessage.ApplicationProperties[ServiceBusMessageHelper.AttemptsPropertyName] = entry.Attempts;
+
+        // Duplicate detection would discard a retry that reuses the original MessageId, so send it under a new id
+        // and keep the original as the entry id.
+        if (_requiresDuplicateDetection)
+        {
+            retryMessage.ApplicationProperties[ServiceBusMessageHelper.OriginalMessageIdPropertyName] = entry.Id;
+            retryMessage.MessageId = Guid.NewGuid().ToString("N");
+        }
+
+        return retryMessage;
     }
 
     protected override void StartWorkingImpl(Func<IQueueEntry<T>, CancellationToken, Task> handler, bool autoComplete, CancellationToken cancellationToken)

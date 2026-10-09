@@ -525,4 +525,110 @@ public class AzureServiceBusQueueTests : QueueTestBase
         return base.WorkItemsWillGetMovedToDeadletterAsync();
     }
 
+    [Fact]
+    public async Task EnqueueAsync_WithoutUniqueId_ReturnsDequeuedEntryIdAsync()
+    {
+        // Arrange
+        using var queue = GetQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            await queue.DeleteQueueAsync();
+            await AssertEmptyQueueAsync(queue);
+
+            IQueueEntry<SimpleWorkItem>? enqueued = null;
+            queue.Enqueued.AddHandler((_, args) =>
+            {
+                enqueued = args.Entry;
+                return Task.CompletedTask;
+            });
+
+            // Act
+            string? id = await queue.EnqueueAsync(new SimpleWorkItem { Data = "id" });
+            var entry = await queue.DequeueAsync(TimeSpan.FromSeconds(5));
+
+            // Assert
+            Assert.False(String.IsNullOrEmpty(id));
+            Assert.NotNull(entry);
+            Assert.Equal(id, entry.Id);
+            Assert.Equal(id, enqueued?.Id);
+            await entry.CompleteAsync();
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+
+    [Fact]
+    public async Task AbandonAsync_WithRetryDelayAndDuplicateDetection_RedeliversRetryAsync()
+    {
+        // Arrange
+        using var queue = GetDuplicateDetectionQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            await queue.DeleteQueueAsync();
+            await AssertEmptyQueueAsync(queue);
+
+            string? id = await queue.EnqueueAsync(new SimpleWorkItem { Data = "retry" }, new QueueEntryOptions
+            {
+                CorrelationId = "correlation",
+                Properties = { ["tenant"] = "a" }
+            });
+            Assert.NotNull(id);
+
+            var entry = await queue.DequeueAsync(TimeSpan.FromSeconds(5));
+            Assert.NotNull(entry);
+
+            // Act
+            await entry.AbandonAsync();
+            var retry = await queue.DequeueAsync(TimeSpan.FromSeconds(15));
+
+            // Assert
+            Assert.NotNull(retry);
+            Assert.Equal("retry", retry.Value.Data);
+            Assert.Equal(id, retry.Id);
+            Assert.Equal(2, retry.Attempts);
+            Assert.Equal("correlation", retry.CorrelationId);
+            Assert.Equal("a", Assert.Single(retry.Properties).Value);
+            Assert.NotEqual(id, Assert.IsType<AzureServiceBusQueueEntry<SimpleWorkItem>>(retry).UnderlyingMessage.MessageId);
+
+            await retry.CompleteAsync();
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+
+    private AzureServiceBusQueue<SimpleWorkItem>? GetDuplicateDetectionQueue()
+    {
+        string? connectionString = Configuration.GetConnectionString("AzureServiceBusConnectionString");
+        if (String.IsNullOrEmpty(connectionString))
+            return null;
+
+        return new AzureServiceBusQueue<SimpleWorkItem>(o =>
+        {
+            o.ConnectionString(connectionString)
+             .Name(_isEmulator ? "foundatio-test-queue-duplicate-detection" : "foundatio-dd-" + Guid.NewGuid().ToString("N")[..10])
+             .Retries(1)
+             .RetryDelay(_ => TimeSpan.FromSeconds(1))
+             .RequiresDuplicateDetection(true)
+             .DuplicateDetectionHistoryTimeWindow(TimeSpan.FromMinutes(1))
+             .ReadQueueTimeout(TimeSpan.FromSeconds(2))
+             .MetricsPollingInterval(TimeSpan.Zero)
+             .LoggerFactory(Log);
+
+            if (!_isEmulator)
+                o.AutoDeleteOnIdle(TimeSpan.FromMinutes(5));
+
+            return o;
+        });
+    }
+
 }
