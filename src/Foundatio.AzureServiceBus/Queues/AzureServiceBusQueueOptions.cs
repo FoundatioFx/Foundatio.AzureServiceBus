@@ -50,6 +50,11 @@ public class AzureServiceBusQueueOptions<T> : SharedQueueOptions<T> where T : cl
     /// <summary>
     /// Set to true if queue requires duplicate detection.
     /// </summary>
+    /// <remarks>
+    /// Delayed retries on duplicate-detection queues are sent under a new <c>MessageId</c> so the broker doesn't
+    /// discard them; <c>entry.Id</c> keeps the original id. The setting is read from the queue itself, except on the
+    /// emulator, which has no management API, where this option must match the queue configuration.
+    /// </remarks>
     public bool? RequiresDuplicateDetection { get; set; }
 
     /// <summary>
