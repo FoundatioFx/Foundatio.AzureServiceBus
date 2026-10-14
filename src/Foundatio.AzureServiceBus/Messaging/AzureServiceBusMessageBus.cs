@@ -160,14 +160,18 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
         }
         catch (MessageBusException)
         {
-            // SendMessageToSubscribersAsync already logged the error
-            // Azure Service Bus SDK will handle retry/dead-letter based on MaxDeliveryCount
+            // SendMessageToSubscribersAsync already logged the error.
+            // Rethrow so the SDK abandons the message (PeekLock) and it is redelivered,
+            // then dead-lettered after MaxDeliveryCount.
+            throw;
         }
         catch (Exception ex)
         {
-            // Catch any other unexpected exceptions for defensive purposes
-            // Azure Service Bus SDK will handle retry/dead-letter based on MaxDeliveryCount
             _logger.LogError(ex, "OnMessageAsync({MessageId}) Error in subscriber: {Message}", brokeredMessage.MessageId, ex.Message);
+
+            // Rethrow so the SDK abandons the message (PeekLock) and it is redelivered,
+            // then dead-lettered after MaxDeliveryCount.
+            throw;
         }
     }
 
