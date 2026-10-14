@@ -9,6 +9,11 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
 {
     public ServiceBusReceivedMessage UnderlyingMessage { get; }
 
+    /// <summary>
+    /// The session receiver that holds this message's session on session-enabled queues; otherwise null.
+    /// </summary>
+    internal ServiceBusSessionReceiver? SessionReceiver { get; init; }
+
     public AzureServiceBusQueueEntry(ServiceBusReceivedMessage message, T value, IQueue<T> queue)
         : base(message.MessageId, message.CorrelationId, value, queue, message.EnqueuedTime.UtcDateTime, GetAttemptCount(message))
     {
