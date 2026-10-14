@@ -126,7 +126,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                         _logger.LogDebug("Created queue {QueueName}", _options.Name);
                     }
                 }
-                catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.MessagingEntityAlreadyExists)
+                catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessagingEntityAlreadyExists)
                 {
                     _logger.LogDebug(ex, "Queue {QueueName} already exists", _options.Name);
                 }
@@ -161,7 +161,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 if (queueExists)
                     await _adminClient.Value.DeleteQueueAsync(_options.Name).AnyContext();
             }
-            catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.MessagingEntityNotFound)
+            catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessagingEntityNotFound)
             {
                 _logger.LogDebug("Queue {QueueName} does not exist", _options.Name);
             }
@@ -173,7 +173,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             {
                 await DrainQueueAsync().AnyContext();
             }
-            catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.MessagingEntityNotFound)
+            catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessagingEntityNotFound)
             {
                 _logger.LogDebug(ex, "Queue {QueueName} not found while draining (emulator); treating as empty", _options.Name);
             }
@@ -605,7 +605,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 ReceiveMode = ServiceBusReceiveMode.PeekLock
             }, timeoutCancellationTokenSource.Token).AnyContext();
         }
-        catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.ServiceTimeout)
+        catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.ServiceTimeout)
         {
             return null;
         }
