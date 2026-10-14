@@ -647,6 +647,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         if (staleSessionReceiver is not null)
             await staleSessionReceiver.DisposeAsync().AnyContext();
+
         return entry;
     }
 
