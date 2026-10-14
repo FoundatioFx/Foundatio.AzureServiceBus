@@ -27,6 +27,18 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     /// </summary>
     private static readonly TimeSpan MinDequeueErrorBackoff = TimeSpan.FromSeconds(1);
 
+    /// <summary>
+    /// Minimum time to accept a session and then receive from it. Accepting a session opens a link, which needs at least one
+    /// network round trip, so a check-once dequeue (cancelled token, 100ms) would otherwise miss messages that are available.
+    /// </summary>
+    private static readonly TimeSpan MinSessionReceiveWait = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Service Bus limit for <see cref="ServiceBusMessage.SessionId"/>.
+    /// See <see href="https://learn.microsoft.com/azure/service-bus-messaging/service-bus-quotas">Service Bus quotas</see>.
+    /// </summary>
+    private const int MaxSessionIdLength = 128;
+
     private readonly AsyncLock _lock = new();
     private readonly ConcurrentDictionary<long, AzureServiceBusQueueEntry<T>> _unsettledEntries = new();
     private readonly Lazy<ServiceBusClient> _client;
@@ -224,6 +236,11 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             {
                 _logger.LogDebug(ex, "Lock already released for unsettled message {MessageId} in queue {QueueName}", message.MessageId, _options.Name);
             }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // One entry failing to settle (for example a worker settling it concurrently) must not stop the others.
+                _logger.LogWarning(ex, "Unable to complete unsettled message {MessageId} in queue {QueueName}", message.MessageId, _options.Name);
+            }
             finally
             {
                 await ReleaseSessionAsync(entry).AnyContext();
@@ -301,7 +318,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             {
                 sessionReceiver = await _client.Value.AcceptSessionAsync(_options.Name, sessionId, cancellationToken: DisposedCancellationToken).AnyContext();
             }
-            catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.SessionCannotBeLocked)
+            catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.SessionCannotBeLocked or ServiceBusFailureReason.ServiceTimeout)
             {
                 continue;
             }
@@ -404,8 +421,15 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
     protected override async Task<string?> EnqueueImplAsync(T data, QueueEntryOptions options)
     {
+        string? sessionId = GetSessionId(options);
+        ValidateSessionId(sessionId);
+
         if (!await OnEnqueuingAsync(data, options).AnyContext())
             return null;
+
+        // Enqueuing handlers may change the options, so the session that is actually sent is validated again.
+        sessionId = GetSessionId(options);
+        ValidateSessionId(sessionId);
 
         Interlocked.Increment(ref _enqueuedCount);
 
@@ -417,10 +441,8 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         if (!String.IsNullOrEmpty(options.CorrelationId))
             message.CorrelationId = options.CorrelationId;
 
-        if (options is AzureServiceBusQueueEntryOptions asbOptions && !String.IsNullOrEmpty(asbOptions.SessionId))
-            message.SessionId = asbOptions.SessionId;
-        else if (!String.IsNullOrEmpty(options.GroupId))
-            message.SessionId = options.GroupId;
+        if (sessionId is not null)
+            message.SessionId = sessionId;
 
         if (options.DeliveryDelay.HasValue && options.DeliveryDelay.Value > TimeSpan.Zero)
             message.ScheduledEnqueueTime = _timeProvider.GetUtcNow().Add(options.DeliveryDelay.Value);
@@ -452,7 +474,31 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         return message.MessageId;
     }
 
-    // TODO: See if we can simplify this.
+    /// <summary>
+    /// An explicit <see cref="AzureServiceBusQueueEntryOptions.SessionId"/> wins over <see cref="QueueEntryOptions.GroupId"/>.
+    /// </summary>
+    private static string? GetSessionId(QueueEntryOptions options)
+    {
+        if (options is AzureServiceBusQueueEntryOptions { SessionId: { Length: > 0 } sessionId })
+            return sessionId;
+
+        return String.IsNullOrEmpty(options.GroupId) ? null : options.GroupId;
+    }
+
+    private void ValidateSessionId(string? sessionId)
+    {
+        if (sessionId is null)
+        {
+            if (RequiresSession)
+                throw new QueueException($"A GroupId is required when enqueuing to the session-enabled queue {_options.Name}.");
+
+            return;
+        }
+
+        if (sessionId.Length > MaxSessionIdLength)
+            throw new ArgumentException($"{nameof(QueueEntryOptions.GroupId)} must be at most {MaxSessionIdLength} characters for Service Bus sessions.", nameof(QueueEntryOptions.GroupId));
+    }
+
     protected override async Task<IQueueEntry<T>?> DequeueImplAsync(CancellationToken linkedCancellationToken)
     {
         // Calculate timeout based on cancellation state - like SQS pattern
@@ -462,6 +508,8 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         _logger.LogTrace("Checking for message in queue {QueueName}... IsCancellationRequested={IsCancellationRequested} ReadQueueTimeout={ReadQueueTimeout}",
             _options.Name, linkedCancellationToken.IsCancellationRequested, timeout);
+
+        await ReleaseExpiredEntriesAsync().AnyContext();
 
         ServiceBusReceivedMessage? message = null;
         ServiceBusSessionReceiver? sessionReceiver = null;
@@ -563,8 +611,34 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             throw;
         }
 
+        // A message redelivered after its lock expired has the same sequence number; release the stale entry's session.
+        if (_unsettledEntries.TryRemove(message.SequenceNumber, out var staleEntry))
+            await ReleaseSessionAsync(staleEntry).AnyContext();
+
         _unsettledEntries[message.SequenceNumber] = entry;
         return entry;
+    }
+
+    /// <summary>
+    /// Stops tracking entries whose lock already expired without being settled (for example a handler that never completed
+    /// the entry). The broker has already made those messages available again, so tracking them would only leak memory,
+    /// and on session queues an open receiver per entry until the queue is deleted or disposed.
+    /// </summary>
+    private async Task ReleaseExpiredEntriesAsync()
+    {
+        if (_unsettledEntries.IsEmpty)
+            return;
+
+        var utcNow = _timeProvider.GetUtcNow();
+        foreach (var (sequenceNumber, entry) in _unsettledEntries)
+        {
+            var lockedUntilUtc = entry.SessionReceiver?.SessionLockedUntil ?? entry.UnderlyingMessage.LockedUntil;
+            if (lockedUntilUtc > utcNow || !_unsettledEntries.TryRemove(sequenceNumber, out _))
+                continue;
+
+            _logger.LogDebug("Releasing unsettled message {MessageId} from queue {QueueName}; its lock expired at {LockedUntilUtc}", entry.UnderlyingMessage.MessageId, _options.Name, lockedUntilUtc);
+            await ReleaseSessionAsync(entry).AnyContext();
+        }
     }
 
     private async Task<(ServiceBusReceivedMessage? Message, ServiceBusSessionReceiver? SessionReceiver)> ReceiveMessageAsync(TimeSpan timeout, CancellationToken cancellationToken)
@@ -573,13 +647,20 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             return (await _queueReceiver!.ReceiveMessageAsync(timeout, cancellationToken).AnyContext(), null);
 
         // Holding the session while its message is in flight keeps each group to one message at a time, in order.
+        // Accepting and receiving share one deadline so a dequeue does not wait twice the timeout.
+        if (timeout < MinSessionReceiveWait)
+            timeout = MinSessionReceiveWait;
+
+        long startedTimestamp = _timeProvider.GetTimestamp();
         var sessionReceiver = await AcceptNextSessionAsync(timeout, cancellationToken).AnyContext();
         if (sessionReceiver is null)
             return (null, null);
 
         try
         {
-            var message = await sessionReceiver.ReceiveMessageAsync(timeout, cancellationToken).AnyContext();
+            var remaining = timeout - _timeProvider.GetElapsedTime(startedTimestamp);
+            var receiveTimeout = remaining > MinSessionReceiveWait ? remaining : MinSessionReceiveWait;
+            var message = await sessionReceiver.ReceiveMessageAsync(receiveTimeout, cancellationToken).AnyContext();
             if (message is not null)
                 return (message, sessionReceiver);
         }
@@ -718,9 +799,12 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             // Calculate retry delay based on attempt number
             var retryDelay = _options.RetryDelay(entry.Attempts);
 
-            // Azure Service Bus doesn't support delayed retry on abandon natively.
-            // If retry delay is specified, we complete the message and re-enqueue with scheduled delivery.
-            if (retryDelay > TimeSpan.Zero)
+            // Azure Service Bus doesn't support delayed retry on abandon natively, so a delayed retry completes the message
+            // and schedules a copy. That copy is not used when:
+            // - the queue uses sessions: the copy goes to the back of the session, so later messages in the group would be
+            //   processed before the retry and per-group ordering would break; a plain abandon keeps it at the head;
+            // - duplicate detection is enabled: the copy reuses the MessageId, so the broker would silently drop it.
+            if (retryDelay > TimeSpan.Zero && !RequiresSession && _options.RequiresDuplicateDetection is not true)
             {
                 _logger.LogTrace("Scheduling retry for queue entry: {QueueEntryId} MessageId={MessageId} RetryDelay={RetryDelay} Attempts={Attempts}",
                     entry.Id, entry.UnderlyingMessage.MessageId, retryDelay, entry.Attempts);
@@ -731,7 +815,11 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                     MessageId = entry.UnderlyingMessage.MessageId,
                     CorrelationId = entry.UnderlyingMessage.CorrelationId,
                     ScheduledEnqueueTime = _timeProvider.GetUtcNow().Add(retryDelay),
-                    SessionId = entry.UnderlyingMessage.SessionId
+                    SessionId = entry.UnderlyingMessage.SessionId,
+                    Subject = entry.UnderlyingMessage.Subject,
+                    ContentType = entry.UnderlyingMessage.ContentType,
+                    ReplyTo = entry.UnderlyingMessage.ReplyTo,
+                    To = entry.UnderlyingMessage.To
                 };
 
                 // Copy application properties (excluding SDK diagnostic properties)

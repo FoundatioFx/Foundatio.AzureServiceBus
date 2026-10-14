@@ -181,6 +181,117 @@ public class AzureServiceBusSessionQueueTests : QueueTestBase
     }
 
     [Fact]
+    public async Task AbandonAsync_WithRetryDelay_KeepsRetryAheadOfLaterMessagesInGroupAsync()
+    {
+        // Arrange
+        using var queue = GetQueue(retries: 2, retryDelay: TimeSpan.FromSeconds(5));
+        if (queue is null)
+            return;
+
+        try
+        {
+            await queue.DeleteQueueAsync();
+            await AssertEmptyQueueAsync(queue);
+            await queue.EnqueueAsync(new SimpleWorkItem { Data = "a-1" }, new QueueEntryOptions { GroupId = "a" });
+            await queue.EnqueueAsync(new SimpleWorkItem { Data = "a-2" }, new QueueEntryOptions { GroupId = "a" });
+
+            // Act
+            var first = await queue.DequeueAsync(TimeSpan.FromSeconds(10));
+            Assert.NotNull(first);
+            Assert.Equal("a-1", first.Value.Data);
+            await first.AbandonAsync();
+
+            var next = await queue.DequeueAsync(TimeSpan.FromSeconds(10));
+
+            // Assert
+            Assert.NotNull(next);
+            Assert.Equal("a-1", next.Value.Data);
+            Assert.Equal(2, next.Attempts);
+            await next.CompleteAsync();
+
+            var last = await queue.DequeueAsync(TimeSpan.FromSeconds(10));
+            Assert.NotNull(last);
+            Assert.Equal("a-2", last.Value.Data);
+            await last.CompleteAsync();
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+
+    [Fact]
+    public async Task EnqueueAsync_WithoutGroupId_ThrowsBeforeSendingAsync()
+    {
+        // Arrange
+        using var queue = GetQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            // Act
+            var exception = await Assert.ThrowsAsync<QueueException>(() => queue.EnqueueAsync(new SimpleWorkItem { Data = "no-group" }));
+
+            // Assert
+            Assert.Contains("GroupId is required", exception.Message);
+            Assert.Equal(0, (await queue.GetQueueStatsAsync()).Enqueued);
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+
+    [Fact]
+    public async Task EnqueueAsync_WithGroupIdOverSessionLimit_ThrowsArgumentExceptionAsync()
+    {
+        // Arrange
+        using var queue = GetQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            // Act & Assert
+            await Assert.ThrowsAsync<ArgumentException>(() => queue.EnqueueAsync(new SimpleWorkItem { Data = "long" }, new QueueEntryOptions { GroupId = new string('g', 129) }));
+            Assert.Equal(0, (await queue.GetQueueStatsAsync()).Enqueued);
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+
+    [Fact]
+    public async Task DequeueAsync_WithZeroTimeout_ReceivesAvailableSessionMessageAsync()
+    {
+        // Arrange
+        using var queue = GetQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            await queue.DeleteQueueAsync();
+            await AssertEmptyQueueAsync(queue);
+            await queue.EnqueueAsync(new SimpleWorkItem { Data = "check-once" }, new QueueEntryOptions { GroupId = "tenant-1" });
+
+            // Act
+            var entry = await queue.DequeueAsync(TimeSpan.Zero);
+
+            // Assert
+            Assert.NotNull(entry);
+            Assert.Equal("check-once", entry.Value.Data);
+            await entry.CompleteAsync();
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+
+    [Fact]
     public async Task StartWorkingAsync_WhenCancelledDuringHandler_ReleasesSessionAndDeletesQueueAsync()
     {
         // Arrange

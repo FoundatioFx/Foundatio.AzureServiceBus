@@ -31,14 +31,13 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
     }
 
     /// <summary>
-    /// Gets the attempt count from the message. Uses the _attempts application property if available (for scheduled retries),
-    /// otherwise falls back to the DeliveryCount.
+    /// Gets the attempt count from the message. A scheduled retry copy stores the attempts of the original in the
+    /// <c>_attempts</c> application property; deliveries of the copy itself (lock expiry or abandon) add its DeliveryCount.
     /// </summary>
     private static int GetAttemptCount(ServiceBusReceivedMessage message)
     {
-        // Check if we have a stored attempt count from a scheduled retry
         if (message.ApplicationProperties.TryGetValue("_attempts", out object? attemptsValue) && attemptsValue is int storedAttempts)
-            return storedAttempts + 1; // Add 1 because this is a new delivery of that retry
+            return storedAttempts + message.DeliveryCount;
 
         // Fall back to delivery count for normal abandon/retry
         return message.DeliveryCount;
