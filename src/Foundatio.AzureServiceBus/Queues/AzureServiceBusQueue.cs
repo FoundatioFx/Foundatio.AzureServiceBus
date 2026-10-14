@@ -617,6 +617,19 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             await entry.SessionReceiver.DisposeAsync().AnyContext();
     }
 
+    /// <summary>
+    /// Releases the session of an entry that will not be settled. Closing the session unlocks its messages,
+    /// so the entry is no longer tracked for settlement on delete.
+    /// </summary>
+    private async Task ReleaseUnsettledSessionAsync(AzureServiceBusQueueEntry<T> entry)
+    {
+        if (entry.SessionReceiver is null)
+            return;
+
+        _unsettledEntries.TryRemove(entry.UnderlyingMessage.SequenceNumber, out _);
+        await ReleaseSessionAsync(entry).AnyContext();
+    }
+
     public override async Task RenewLockAsync(IQueueEntry<T> queueEntry)
     {
         _logger.LogDebug("Queue {QueueName} renew lock item: {QueueEntryId}", _options.Name, queueEntry.Id);
@@ -641,15 +654,10 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         var entry = ToQueueEntry(queueEntry);
 
-        try
-        {
-            await GetReceiver(entry).CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
-        }
-        finally
-        {
-            _unsettledEntries.TryRemove(entry.UnderlyingMessage.SequenceNumber, out _);
-            await ReleaseSessionAsync(entry).AnyContext();
-        }
+        // On failure the session stays open so the caller can still abandon the entry, which releases it.
+        await GetReceiver(entry).CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
+        _unsettledEntries.TryRemove(entry.UnderlyingMessage.SequenceNumber, out _);
+        await ReleaseSessionAsync(entry).AnyContext();
 
         Interlocked.Increment(ref _completedCount);
         queueEntry.MarkCompleted();
@@ -763,7 +771,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
                 if (linkedCancellationToken.IsCancellationRequested)
                 {
-                    await ReleaseSessionAsync(ToQueueEntry(entry)).AnyContext();
+                    await ReleaseUnsettledSessionAsync(ToQueueEntry(entry)).AnyContext();
                     continue;
                 }
 
@@ -780,12 +788,21 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                     _logger.LogError(ex, "Worker error: {Message}", ex.Message);
 
                     if (!entry.IsAbandoned && !entry.IsCompleted && !linkedCancellationToken.IsCancellationRequested)
-                        await entry.AbandonAsync().AnyContext();
+                    {
+                        try
+                        {
+                            await entry.AbandonAsync().AnyContext();
+                        }
+                        catch (Exception abandonEx)
+                        {
+                            _logger.LogError(abandonEx, "Error abandoning queue entry {QueueEntryId}: {Message}", entry.Id, abandonEx.Message);
+                        }
+                    }
                 }
                 finally
                 {
                     if (!entry.IsAbandoned && !entry.IsCompleted && linkedCancellationToken.IsCancellationRequested)
-                        await ReleaseSessionAsync(ToQueueEntry(entry)).AnyContext();
+                        await ReleaseUnsettledSessionAsync(ToQueueEntry(entry)).AnyContext();
                 }
             }
 

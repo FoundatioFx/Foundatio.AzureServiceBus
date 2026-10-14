@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Foundatio.Queues;
 using Foundatio.Serializer;
@@ -171,6 +172,51 @@ public class AzureServiceBusSessionQueueTests : QueueTestBase
             Assert.Equal("tenant-1", retry.GroupId);
             Assert.Equal(2, retry.Attempts);
             Assert.True(retry.IsCompleted);
+            Assert.Null(await queue.DequeueAsync(TimeSpan.FromSeconds(3)));
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+
+    [Fact]
+    public async Task StartWorkingAsync_WhenCancelledDuringHandler_ReleasesSessionAndDeletesQueueAsync()
+    {
+        // Arrange
+        using var queue = GetQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            await queue.EnqueueAsync(new SimpleWorkItem { Data = "tenant-1" }, new QueueEntryOptions { GroupId = "tenant-1" });
+
+            var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var handlerStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var workerCancellation = new CancellationTokenSource();
+
+            await queue.StartWorkingAsync(async (_, cancellationToken) =>
+            {
+                handlerStarted.TrySetResult();
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                }
+                finally
+                {
+                    handlerStopped.TrySetResult();
+                }
+            }, cancellationToken: workerCancellation.Token);
+
+            await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestCancellationToken);
+
+            // Act
+            await workerCancellation.CancelAsync();
+            await handlerStopped.Task.WaitAsync(TimeSpan.FromSeconds(10), TestCancellationToken);
+            await queue.DeleteQueueAsync();
+
+            // Assert
             Assert.Null(await queue.DequeueAsync(TimeSpan.FromSeconds(3)));
         }
         finally
