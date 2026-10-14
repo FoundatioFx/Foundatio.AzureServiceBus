@@ -435,6 +435,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             Timeouts = 0
         };
     }
+
     protected override async Task<QueueStats> GetQueueStatsImplAsync()
     {
         // Skip admin API calls when using the emulator - it doesn't support the management HTTP API
@@ -444,6 +445,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         var properties = await _adminClient.Value.GetQueueRuntimePropertiesAsync(_options.Name).AnyContext();
         return CreateQueueStats(properties.Value.ActiveMessageCount, properties.Value.DeadLetterMessageCount);
     }
+
     protected override Task<IEnumerable<T>> GetDeadletterItemsImplAsync(CancellationToken cancellationToken)
     {
         throw new NotImplementedException();
