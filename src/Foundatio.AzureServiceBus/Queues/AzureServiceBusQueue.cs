@@ -39,6 +39,14 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     /// </summary>
     private const int MaxSessionIdLength = 128;
 
+    /// <summary>
+    /// Margin before an unsettled entry whose lock appears expired is released, so a local clock that runs ahead of the
+    /// broker doesn't close a session that a handler still holds.
+    /// </summary>
+    private static readonly TimeSpan ExpiredLockGracePeriod = TimeSpan.FromSeconds(30);
+
+    private bool? _queueRequiresDuplicateDetection;
+
     private readonly AsyncLock _lock = new();
     private readonly ConcurrentDictionary<long, AzureServiceBusQueueEntry<T>> _unsettledEntries = new();
     private readonly Lazy<ServiceBusClient> _client;
@@ -136,6 +144,12 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
                         await _adminClient.Value.CreateQueueAsync(CreateQueueOptions(), cancellationToken).AnyContext();
                         _logger.LogDebug("Created queue {QueueName}", _options.Name);
+                    }
+                    else
+                    {
+                        // Delayed retries are disabled on queues with duplicate detection, so use the existing queue's setting.
+                        var properties = await _adminClient.Value.GetQueueAsync(_options.Name, cancellationToken).AnyContext();
+                        _queueRequiresDuplicateDetection = properties.Value.RequiresDuplicateDetection;
                     }
                 }
                 catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessagingEntityAlreadyExists)
@@ -612,10 +626,15 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         }
 
         // A message redelivered after its lock expired has the same sequence number; release the stale entry's session.
-        if (_unsettledEntries.TryRemove(message.SequenceNumber, out var staleEntry))
-            await ReleaseSessionAsync(staleEntry).AnyContext();
+        ServiceBusSessionReceiver? staleSessionReceiver = null;
+        _unsettledEntries.AddOrUpdate(message.SequenceNumber, entry, (_, staleEntry) =>
+        {
+            staleSessionReceiver = staleEntry.SessionReceiver;
+            return entry;
+        });
 
-        _unsettledEntries[message.SequenceNumber] = entry;
+        if (staleSessionReceiver is not null)
+            await staleSessionReceiver.DisposeAsync().AnyContext();
         return entry;
     }
 
@@ -629,11 +648,12 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         if (_unsettledEntries.IsEmpty)
             return;
 
-        var utcNow = _timeProvider.GetUtcNow();
-        foreach (var (sequenceNumber, entry) in _unsettledEntries)
+        var releaseBeforeUtc = _timeProvider.GetUtcNow() - ExpiredLockGracePeriod;
+        foreach (var tracked in _unsettledEntries)
         {
+            var entry = tracked.Value;
             var lockedUntilUtc = entry.SessionReceiver?.SessionLockedUntil ?? entry.UnderlyingMessage.LockedUntil;
-            if (lockedUntilUtc > utcNow || !_unsettledEntries.TryRemove(sequenceNumber, out _))
+            if (lockedUntilUtc > releaseBeforeUtc || !_unsettledEntries.TryRemove(tracked))
                 continue;
 
             _logger.LogDebug("Releasing unsettled message {MessageId} from queue {QueueName}; its lock expired at {LockedUntilUtc}", entry.UnderlyingMessage.MessageId, _options.Name, lockedUntilUtc);
@@ -712,7 +732,8 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     /// </summary>
     private async Task UntrackAsync(AzureServiceBusQueueEntry<T> entry)
     {
-        _unsettledEntries.TryRemove(entry.UnderlyingMessage.SequenceNumber, out _);
+        // Only remove this entry: a redelivery with the same sequence number may already be tracked in its place.
+        _unsettledEntries.TryRemove(KeyValuePair.Create(entry.UnderlyingMessage.SequenceNumber, entry));
         await ReleaseSessionAsync(entry).AnyContext();
     }
 
@@ -804,7 +825,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             // - the queue uses sessions: the copy goes to the back of the session, so later messages in the group would be
             //   processed before the retry and per-group ordering would break; a plain abandon keeps it at the head;
             // - duplicate detection is enabled: the copy reuses the MessageId, so the broker would silently drop it.
-            if (retryDelay > TimeSpan.Zero && !RequiresSession && _options.RequiresDuplicateDetection is not true)
+            if (retryDelay > TimeSpan.Zero && !RequiresSession && (_queueRequiresDuplicateDetection ?? _options.RequiresDuplicateDetection) is not true)
             {
                 _logger.LogTrace("Scheduling retry for queue entry: {QueueEntryId} MessageId={MessageId} RetryDelay={RetryDelay} Attempts={Attempts}",
                     entry.Id, entry.UnderlyingMessage.MessageId, retryDelay, entry.Attempts);
