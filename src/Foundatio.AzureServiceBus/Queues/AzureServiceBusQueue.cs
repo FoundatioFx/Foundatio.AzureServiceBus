@@ -142,7 +142,8 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                         if (!_options.CanCreateQueue)
                             throw new QueueException($"Queue {_options.Name} does not exist and CanCreateQueue is false.");
 
-                        await _adminClient.Value.CreateQueueAsync(CreateQueueOptions(), cancellationToken).AnyContext();
+                        var created = await _adminClient.Value.CreateQueueAsync(CreateQueueOptions(), cancellationToken).AnyContext();
+                        _queueRequiresDuplicateDetection = created.Value.RequiresDuplicateDetection;
                         _logger.LogDebug("Created queue {QueueName}", _options.Name);
                     }
                     else
@@ -217,6 +218,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             _queueReceiver = null;
         }
 
+        _queueRequiresDuplicateDetection = null;
         _enqueuedCount = 0;
         _dequeuedCount = 0;
         _completedCount = 0;
@@ -252,8 +254,10 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // One entry failing to settle (for example a worker settling it concurrently) must not stop the others.
-                _logger.LogWarning(ex, "Unable to complete unsettled message {MessageId} in queue {QueueName}", message.MessageId, _options.Name);
+                // One entry failing to settle must not stop the others. Releasing its lock lets the drain that follows
+                // receive and remove it instead of it reappearing once the lock expires.
+                _logger.LogWarning(ex, "Unable to complete unsettled message {MessageId} in queue {QueueName}; abandoning it so it can be drained", message.MessageId, _options.Name);
+                await TryAbandonUnsettledAsync(receiver, message).AnyContext();
             }
             finally
             {
@@ -268,6 +272,18 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     /// passes (the emulator does not honor <c>CancelScheduledMessagesAsync</c>). Stops when the queue is empty, when the remaining
     /// messages are locked by another receiver, or when waiting for scheduled messages would exceed <see cref="MaxScheduledDrainWait"/> in total.
     /// </summary>
+    private async Task TryAbandonUnsettledAsync(ServiceBusReceiver receiver, ServiceBusReceivedMessage message)
+    {
+        try
+        {
+            await receiver.AbandonMessageAsync(message, cancellationToken: DisposedCancellationToken).AnyContext();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Unable to abandon unsettled message {MessageId} in queue {QueueName}", message.MessageId, _options.Name);
+        }
+    }
+
     private async Task DrainQueueAsync()
     {
         await EnsureQueueCreatedAsync().AnyContext();
@@ -435,15 +451,17 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
     protected override async Task<string?> EnqueueImplAsync(T data, QueueEntryOptions options)
     {
-        string? sessionId = GetSessionId(options);
-        ValidateSessionId(sessionId);
+        // The length is checked before Enqueuing handlers so an invalid value has no side effects; a missing group is only
+        // rejected afterwards because a handler may still assign it.
+        ValidateSessionIdLength(GetSessionId(options));
 
         if (!await OnEnqueuingAsync(data, options).AnyContext())
             return null;
 
-        // Enqueuing handlers may change the options, so the session that is actually sent is validated again.
-        sessionId = GetSessionId(options);
-        ValidateSessionId(sessionId);
+        string? sessionId = GetSessionId(options);
+        ValidateSessionIdLength(sessionId);
+        if (sessionId is null && RequiresSession)
+            throw new QueueException($"A GroupId is required when enqueuing to the session-enabled queue {_options.Name}.");
 
         Interlocked.Increment(ref _enqueuedCount);
 
@@ -499,17 +517,9 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         return String.IsNullOrEmpty(options.GroupId) ? null : options.GroupId;
     }
 
-    private void ValidateSessionId(string? sessionId)
+    private static void ValidateSessionIdLength(string? sessionId)
     {
-        if (sessionId is null)
-        {
-            if (RequiresSession)
-                throw new QueueException($"A GroupId is required when enqueuing to the session-enabled queue {_options.Name}.");
-
-            return;
-        }
-
-        if (sessionId.Length > MaxSessionIdLength)
+        if (sessionId?.Length > MaxSessionIdLength)
             throw new ArgumentException($"{nameof(QueueEntryOptions.GroupId)} must be at most {MaxSessionIdLength} characters for Service Bus sessions.", nameof(QueueEntryOptions.GroupId));
     }
 

@@ -244,6 +244,39 @@ public class AzureServiceBusSessionQueueTests : QueueTestBase
     }
 
     [Fact]
+    public async Task EnqueueAsync_WhenEnqueuingHandlerAssignsGroupId_EnqueuesToSessionAsync()
+    {
+        // Arrange
+        using var queue = GetQueue();
+        if (queue is null)
+            return;
+
+        try
+        {
+            await queue.DeleteQueueAsync();
+            await AssertEmptyQueueAsync(queue);
+            queue.Enqueuing.AddHandler((_, args) =>
+            {
+                args.Options.GroupId ??= "assigned";
+                return Task.CompletedTask;
+            });
+
+            // Act
+            await queue.EnqueueAsync(new SimpleWorkItem { Data = "handler-group" });
+            var entry = await queue.DequeueAsync(TimeSpan.FromSeconds(10));
+
+            // Assert
+            Assert.NotNull(entry);
+            Assert.Equal("assigned", entry.GroupId);
+            await entry.CompleteAsync();
+        }
+        finally
+        {
+            await CleanupQueueAsync(queue);
+        }
+    }
+
+    [Fact]
     public async Task EnqueueAsync_WithGroupIdOverSessionLimit_ThrowsArgumentExceptionAsync()
     {
         // Arrange
