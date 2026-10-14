@@ -250,13 +250,13 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             }
             catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessageLockLost or ServiceBusFailureReason.SessionLockLost)
             {
-                _logger.LogDebug(ex, "Lock already released for unsettled message {MessageId} in queue {QueueName}", message.MessageId, _options.Name);
+                _logger.LogDebug(ex, "Lock already released for unsettled message {MessageId} in queue {QueueName}: {Message}", message.MessageId, _options.Name, ex.Message);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // One entry failing to settle must not stop the others. Releasing its lock lets the drain that follows
                 // receive and remove it instead of it reappearing once the lock expires.
-                _logger.LogWarning(ex, "Unable to complete unsettled message {MessageId} in queue {QueueName}; abandoning it so it can be drained", message.MessageId, _options.Name);
+                _logger.LogWarning(ex, "Unable to complete unsettled message {MessageId} in queue {QueueName}; abandoning it so it can be drained: {Message}", message.MessageId, _options.Name, ex.Message);
                 await TryAbandonUnsettledAsync(receiver, message).AnyContext();
             }
             finally
@@ -280,7 +280,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogDebug(ex, "Unable to abandon unsettled message {MessageId} in queue {QueueName}", message.MessageId, _options.Name);
+            _logger.LogDebug(ex, "Unable to abandon unsettled message {MessageId} in queue {QueueName}: {Message}", message.MessageId, _options.Name, ex.Message);
         }
     }
 
