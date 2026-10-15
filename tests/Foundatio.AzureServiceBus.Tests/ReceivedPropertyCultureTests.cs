@@ -35,7 +35,8 @@ public class ReceivedPropertyCultureTests
         Assert.DoesNotContain("CorrelationId", entry.Properties.Keys);
         Assert.DoesNotContain("_attempts", entry.Properties.Keys);
         Assert.Equal("transport-correlation", entry.CorrelationId);
-        Assert.Equal(3, entry.Attempts);
+        Assert.Equal(5, entry.Attempts);
+        Assert.Equal("group-id", entry.GroupId);
         Assert.Same(message, entry.UnderlyingMessage);
         AssertOriginalProperties(message);
     }
@@ -101,9 +102,10 @@ public class ReceivedPropertyCultureTests
         return ServiceBusModelFactory.ServiceBusReceivedMessage(
             body: BinaryData.FromString("payload"),
             messageId: "message-id",
+            sessionId: "group-id",
             correlationId: "transport-correlation",
             contentType: "synthetic-message",
-            deliveryCount: 1,
+            deliveryCount: 3,
             properties: new Dictionary<string, object>
             {
                 ["amount"] = 1234.5m,
