@@ -881,13 +881,13 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
     protected override void StartWorkingImpl(Func<IQueueEntry<T>, CancellationToken, Task> handler, bool autoComplete, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(handler);
+
         if (!RequiresSession)
         {
             _ = StartWorker(handler, autoComplete, cancellationToken);
             return;
         }
-
-        ArgumentNullException.ThrowIfNull(handler);
 
         var linkedCancellationToken = GetLinkedDisposableCancellationTokenSource(cancellationToken);
 
