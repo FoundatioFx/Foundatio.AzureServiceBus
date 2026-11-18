@@ -144,7 +144,7 @@ public class AzureServiceBusMessageBus : MessageBusBase<AzureServiceBusMessageBu
             if (ServiceBusMessageHelper.IsSdkDiagnosticProperty(property.Key))
                 continue;
 
-            if (property.Value?.ToString() is { } value)
+            if (ServiceBusMessageHelper.FormatPropertyValue(property.Value) is { } value)
                 message.Properties[property.Key] = value;
         }
 

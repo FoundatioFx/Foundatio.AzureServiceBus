@@ -25,7 +25,7 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
                 ServiceBusMessageHelper.IsSdkDiagnosticProperty(property.Key))
                 continue;
 
-            if (property.Value?.ToString() is { } valueString)
+            if (ServiceBusMessageHelper.FormatPropertyValue(property.Value) is { } valueString)
                 Properties.Add(property.Key, valueString);
         }
 
