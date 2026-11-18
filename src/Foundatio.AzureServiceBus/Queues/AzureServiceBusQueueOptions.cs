@@ -50,6 +50,10 @@ public class AzureServiceBusQueueOptions<T> : SharedQueueOptions<T> where T : cl
     /// <summary>
     /// Set to true if queue requires duplicate detection.
     /// </summary>
+    /// <remarks>
+    /// On non-session queues with duplicate detection, each scheduled copy gets a new MessageId and queue entry ID.
+    /// Use a stable business operation ID for idempotency across retries. The emulator uses this option in place of reading the queue's setting.
+    /// </remarks>
     public bool? RequiresDuplicateDetection { get; set; }
 
     /// <summary>
@@ -105,7 +109,7 @@ public class AzureServiceBusQueueOptions<T> : SharedQueueOptions<T> where T : cl
     /// <summary>
     /// The function to calculate retry delay based on the attempt number. A delayed retry is sent as a scheduled copy of the
     /// message. It is not applied on session-enabled queues, where the copy would be processed after later messages in its
-    /// group, or on queues with duplicate detection, where the copy would be discarded; those queues retry immediately.
+    /// group. Those queues abandon immediately to preserve group order.
     /// </summary>
     public Func<int, TimeSpan> RetryDelay { get; set; } = attempt => TimeSpan.FromSeconds(Math.Pow(2, attempt)) + TimeSpan.FromMilliseconds(Random.Shared.Next(0, 100));
 }

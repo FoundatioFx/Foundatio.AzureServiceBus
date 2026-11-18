@@ -7,7 +7,6 @@ using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using Foundatio.AsyncEx;
 using Foundatio.AzureServiceBus.Queues;
-using Foundatio.AzureServiceBus.Utility;
 using Foundatio.Extensions;
 using Foundatio.Serializer;
 using Microsoft.Extensions.Logging;
@@ -45,7 +44,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     /// </summary>
     private static readonly TimeSpan ExpiredLockGracePeriod = TimeSpan.FromSeconds(30);
 
-    private bool? _queueRequiresDuplicateDetection;
+    private bool _queueRequiresDuplicateDetection;
 
     private readonly AsyncLock _lock = new();
     private readonly ConcurrentDictionary<long, AzureServiceBusQueueEntry<T>> _unsettledEntries = new();
@@ -131,35 +130,15 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             _logger.LogTrace("Ensuring queue {QueueName} exists", _options.Name);
 
             // Skip admin API calls when using the emulator - it doesn't support the management HTTP API
-            if (!_isEmulator)
+            if (_isEmulator)
             {
-                try
-                {
-                    bool queueExists = await _adminClient.Value.QueueExistsAsync(_options.Name, cancellationToken).AnyContext();
-                    if (!queueExists)
-                    {
-                        if (!_options.CanCreateQueue)
-                            throw new QueueException($"Queue {_options.Name} does not exist and CanCreateQueue is false.");
-
-                        var created = await _adminClient.Value.CreateQueueAsync(CreateQueueOptions(), cancellationToken).AnyContext();
-                        _queueRequiresDuplicateDetection = created.Value.RequiresDuplicateDetection;
-                        _logger.LogDebug("Created queue {QueueName}", _options.Name);
-                    }
-                    else
-                    {
-                        // Delayed retries are disabled on queues with duplicate detection, so use the existing queue's setting.
-                        var properties = await _adminClient.Value.GetQueueAsync(_options.Name, cancellationToken).AnyContext();
-                        _queueRequiresDuplicateDetection = properties.Value.RequiresDuplicateDetection;
-                    }
-                }
-                catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessagingEntityAlreadyExists)
-                {
-                    _logger.LogDebug(ex, "Queue {QueueName} already exists", _options.Name);
-                }
+                _logger.LogDebug("Skipping queue existence check - using Azure Service Bus Emulator");
+                _queueRequiresDuplicateDetection = _options.RequiresDuplicateDetection is true;
             }
             else
             {
-                _logger.LogDebug("Skipping queue existence check - using Azure Service Bus Emulator");
+                var properties = await GetOrCreateQueueAsync(cancellationToken).AnyContext();
+                _queueRequiresDuplicateDetection = properties.RequiresDuplicateDetection;
             }
 
             _queueSender = _client.Value.CreateSender(_options.Name);
@@ -169,6 +148,31 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             });
 
             _logger.LogTrace("Queue {QueueName} setup complete", _options.Name);
+        }
+    }
+
+    private async Task<QueueProperties> GetOrCreateQueueAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await AdminClient.GetQueueAsync(_options.Name, cancellationToken).AnyContext()).Value;
+        }
+        catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessagingEntityNotFound)
+        {
+            if (!_options.CanCreateQueue)
+                throw new QueueException($"Queue {_options.Name} does not exist and CanCreateQueue is false.");
+        }
+
+        try
+        {
+            var created = await AdminClient.CreateQueueAsync(CreateQueueOptions(), cancellationToken).AnyContext();
+            _logger.LogDebug("Created queue {QueueName}", _options.Name);
+            return created.Value;
+        }
+        catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessagingEntityAlreadyExists)
+        {
+            _logger.LogDebug(ex, "Queue {QueueName} already exists", _options.Name);
+            return (await AdminClient.GetQueueAsync(_options.Name, cancellationToken).AnyContext()).Value;
         }
     }
 
@@ -217,7 +221,6 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             _queueReceiver = null;
         }
 
-        _queueRequiresDuplicateDetection = null;
         _enqueuedCount = 0;
         _dequeuedCount = 0;
         _completedCount = 0;
@@ -466,10 +469,10 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
 
         Interlocked.Increment(ref _enqueuedCount);
 
-        var message = new ServiceBusMessage(_serializer.SerializeToBytes(data));
-
-        if (!String.IsNullOrEmpty(options.UniqueId))
-            message.MessageId = options.UniqueId;
+        var message = new ServiceBusMessage(_serializer.SerializeToBytes(data))
+        {
+            MessageId = String.IsNullOrEmpty(options.UniqueId) ? Guid.NewGuid().ToString("N") : options.UniqueId
+        };
 
         if (!String.IsNullOrEmpty(options.CorrelationId))
             message.CorrelationId = options.CorrelationId;
@@ -826,57 +829,28 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         if (entry.Attempts > _options.Retries)
         {
             await DeadLetterMessageAsync(entry).AnyContext();
+            return;
         }
-        else
+
+        var retryDelay = _options.RetryDelay(entry.Attempts);
+
+        // Service Bus has no delayed abandon. A scheduled copy goes to the back of a session,
+        // so abandon in place to keep the retry ahead of its group.
+        if (retryDelay <= TimeSpan.Zero || RequiresSession)
         {
-            // Calculate retry delay based on attempt number
-            var retryDelay = _options.RetryDelay(entry.Attempts);
-
-            // Azure Service Bus doesn't support delayed retry on abandon natively, so a delayed retry completes the message
-            // and schedules a copy. That copy is not used when:
-            // - the queue uses sessions: the copy goes to the back of the session, so later messages in the group would be
-            //   processed before the retry and per-group ordering would break; a plain abandon keeps it at the head;
-            // - duplicate detection is enabled: the copy reuses the MessageId, so the broker would silently drop it.
-            if (retryDelay > TimeSpan.Zero && !RequiresSession && (_queueRequiresDuplicateDetection ?? _options.RequiresDuplicateDetection) is not true)
-            {
-                _logger.LogTrace("Scheduling retry for queue entry: {QueueEntryId} MessageId={MessageId} RetryDelay={RetryDelay} Attempts={Attempts}",
-                    entry.Id, entry.UnderlyingMessage.MessageId, retryDelay, entry.Attempts);
-
-                // Create a new message with same content for scheduled retry
-                var retryMessage = new ServiceBusMessage(entry.UnderlyingMessage.Body)
-                {
-                    MessageId = entry.UnderlyingMessage.MessageId,
-                    CorrelationId = entry.UnderlyingMessage.CorrelationId,
-                    ScheduledEnqueueTime = _timeProvider.GetUtcNow().Add(retryDelay),
-                    SessionId = entry.UnderlyingMessage.SessionId,
-                    Subject = entry.UnderlyingMessage.Subject,
-                    ContentType = entry.UnderlyingMessage.ContentType,
-                    ReplyTo = entry.UnderlyingMessage.ReplyTo,
-                    To = entry.UnderlyingMessage.To
-                };
-
-                // Copy application properties (excluding SDK diagnostic properties)
-                foreach (var prop in entry.UnderlyingMessage.ApplicationProperties)
-                {
-                    if (!ServiceBusMessageHelper.IsSdkDiagnosticProperty(prop.Key))
-                        retryMessage.ApplicationProperties[prop.Key] = prop.Value;
-                }
-
-                // Store attempt count for next dequeue
-                retryMessage.ApplicationProperties["_attempts"] = entry.Attempts;
-
-                // Send the retry before completing the original: a failed send cannot lose the message, and a failed
-                // complete redelivers it, which is the documented at-least-once Service Bus contract.
-                await _queueSender!.SendMessageAsync(retryMessage).AnyContext();
-
-                await GetReceiver(entry).CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
-            }
-            else
-            {
-                // No retry delay - just abandon for immediate retry
-                await GetReceiver(entry).AbandonMessageAsync(entry.UnderlyingMessage).AnyContext();
-            }
+            await GetReceiver(entry).AbandonMessageAsync(entry.UnderlyingMessage).AnyContext();
+            return;
         }
+
+        _logger.LogTrace("Scheduling retry for queue entry: {QueueEntryId} MessageId={MessageId} RetryDelay={RetryDelay} Attempts={Attempts}",
+            entry.Id, entry.UnderlyingMessage.MessageId, retryDelay, entry.Attempts);
+
+        var retryMessage = entry.CreateRetryMessage(_timeProvider.GetUtcNow().Add(retryDelay), _queueRequiresDuplicateDetection);
+
+        // Send the retry before completing the original: a failed send cannot lose the message, and a failed
+        // complete redelivers it, which is the documented at-least-once Service Bus contract.
+        await _queueSender!.SendMessageAsync(retryMessage).AnyContext();
+        await GetReceiver(entry).CompleteMessageAsync(entry.UnderlyingMessage).AnyContext();
     }
 
     protected override void StartWorkingImpl(Func<IQueueEntry<T>, CancellationToken, Task> handler, bool autoComplete, CancellationToken cancellationToken)

@@ -14,6 +14,17 @@
             }
           },
           {
+            "Name": "foundatio-test-queue-duplicate-detection",
+            "Properties": {
+              "LockDuration": "PT1M",
+              "MaxDeliveryCount": 5,
+              "DefaultMessageTimeToLive": "PT1H",
+              "DeadLetteringOnMessageExpiration": true,
+              "RequiresDuplicateDetection": true,
+              "DuplicateDetectionHistoryTimeWindow": "PT1M"
+            }
+          },
+          {
             "Name": "foundatio-test-queue-sessions",
             "Properties": {
               "LockDuration": "PT1M",
