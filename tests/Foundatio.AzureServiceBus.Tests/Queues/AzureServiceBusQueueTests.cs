@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
-using Azure.Messaging.ServiceBus;
 using Foundatio.AzureServiceBus.Queues;
 using Foundatio.Queues;
 using Foundatio.Serializer;
@@ -122,13 +121,13 @@ public class AzureServiceBusQueueTests : QueueTestBase
                 UniqueId = Guid.NewGuid().ToString("N"),
                 GroupId = "group",
                 CorrelationId = "correlation",
-                Properties = { ["tenant"] = "a", ["_originalMessageId"] = "caller metadata" }
+                Properties = { ["tenant"] = "a", ["operation-id"] = "payment-42" }
             });
 
             var original = Assert.IsType<AzureServiceBusQueueEntry<SimpleWorkItem>>(
                 await receiver.DequeueAsync(TimeSpan.FromSeconds(5)));
             Assert.Equal(id, original.Id);
-            Assert.Equal("caller metadata", original.Properties["_originalMessageId"]);
+            Assert.Equal("payment-42", original.Properties["operation-id"]);
 
             var previous = original;
             for (int attempt = 2; attempt <= 3; attempt++)
@@ -142,13 +141,13 @@ public class AzureServiceBusQueueTests : QueueTestBase
                 // Assert
                 Assert.True(Stopwatch.GetElapsedTime(started) >= retryDelay - TimeSpan.FromMilliseconds(200));
                 Assert.NotEqual(previous.UnderlyingMessage.MessageId, retry.UnderlyingMessage.MessageId);
-                Assert.Equal(id, retry.Id);
+                Assert.Equal(retry.UnderlyingMessage.MessageId, retry.Id);
                 Assert.Equal(attempt, retry.Attempts);
                 Assert.Equal("retry", retry.Value.Data);
                 Assert.Equal("group", retry.GroupId);
                 Assert.Equal("correlation", retry.CorrelationId);
                 Assert.Equal("a", retry.Properties["tenant"]);
-                Assert.Equal("caller metadata", retry.Properties["_originalMessageId"]);
+                Assert.Equal("payment-42", retry.Properties["operation-id"]);
                 previous = retry;
             }
 
@@ -653,26 +652,6 @@ public class AzureServiceBusQueueTests : QueueTestBase
     public override Task QueueEntry_GetValue_ReturnsUntypedValueAsync()
     {
         return base.QueueEntry_GetValue_ReturnsUntypedValueAsync();
-    }
-
-    [Theory]
-    [InlineData("x-opt-foundatio-id")]
-    [InlineData("x-opt-foundatio-original-message-id")]
-    public void QueueEntry_WithRetryAnnotation_RestoresEntryId(string annotation)
-    {
-        // Arrange
-        using var queue = GetQueue();
-        Assert.SkipWhen(queue is null, "Service Bus connection string is required.");
-        Assert.NotNull(queue);
-        var message = ServiceBusModelFactory.ServiceBusReceivedMessage(messageId: "scheduled-copy");
-        message.GetRawAmqpMessage().MessageAnnotations[annotation] = "entry-id";
-
-        // Act
-        var entry = new AzureServiceBusQueueEntry<SimpleWorkItem>(message, new SimpleWorkItem(), queue);
-
-        // Assert
-        Assert.Equal("entry-id", entry.Id);
-        Assert.Equal("scheduled-copy", entry.UnderlyingMessage.MessageId);
     }
 
     [Fact]

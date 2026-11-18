@@ -51,8 +51,8 @@ public class AzureServiceBusQueueOptions<T> : SharedQueueOptions<T> where T : cl
     /// Set to true if queue requires duplicate detection.
     /// </summary>
     /// <remarks>
-    /// On non-session queues with duplicate detection, each scheduled retry gets a new broker MessageId while the
-    /// queue entry ID stays the same. The emulator uses this option in place of reading the queue's setting.
+    /// On non-session queues with duplicate detection, each scheduled copy gets a new MessageId and queue entry ID.
+    /// Use a stable business operation ID for idempotency across retries. The emulator uses this option in place of reading the queue's setting.
     /// </remarks>
     public bool? RequiresDuplicateDetection { get; set; }
 

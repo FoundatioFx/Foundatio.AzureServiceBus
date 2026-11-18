@@ -7,8 +7,6 @@ namespace Foundatio.Queues;
 public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
 {
     private const string AttemptsPropertyName = "_attempts";
-    private const string EntryIdAnnotation = "x-opt-foundatio-id";
-    private const string PreviewEntryIdAnnotation = "x-opt-foundatio-original-message-id";
 
     public ServiceBusReceivedMessage UnderlyingMessage { get; }
 
@@ -18,7 +16,7 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
     internal ServiceBusSessionReceiver? SessionReceiver { get; init; }
 
     public AzureServiceBusQueueEntry(ServiceBusReceivedMessage message, T value, IQueue<T> queue)
-        : base(GetEntryId(message), message.CorrelationId, value, queue, message.EnqueuedTime.UtcDateTime, GetAttemptCount(message))
+        : base(message.MessageId, message.CorrelationId, value, queue, message.EnqueuedTime.UtcDateTime, GetAttemptCount(message))
     {
         foreach (var property in message.ApplicationProperties)
         {
@@ -46,23 +44,9 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
 
         retry.ApplicationProperties[AttemptsPropertyName] = Attempts;
         if (requiresDuplicateDetection)
-        {
-            // Keep the logical ID separate from caller-owned application properties when the broker ID changes.
-            retry.GetRawAmqpMessage().MessageAnnotations[EntryIdAnnotation] = Id;
             retry.MessageId = Guid.NewGuid().ToString("N");
-        }
 
         return retry;
-    }
-
-    private static string GetEntryId(ServiceBusReceivedMessage message)
-    {
-        var annotations = message.GetRawAmqpMessage().MessageAnnotations;
-        if ((annotations.TryGetValue(EntryIdAnnotation, out object? value) || annotations.TryGetValue(PreviewEntryIdAnnotation, out value)) &&
-            value is string { Length: > 0 } entryId)
-            return entryId;
-
-        return message.MessageId;
     }
 
     /// <summary>
