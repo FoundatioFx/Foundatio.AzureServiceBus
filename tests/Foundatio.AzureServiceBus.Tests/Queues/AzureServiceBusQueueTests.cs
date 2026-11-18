@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
+using Azure.Messaging.ServiceBus;
 using Foundatio.AzureServiceBus.Queues;
 using Foundatio.Queues;
 using Foundatio.Serializer;
@@ -670,6 +672,35 @@ public class AzureServiceBusQueueTests : QueueTestBase
     public override Task QueueEntry_GetValue_ReturnsUntypedValueAsync()
     {
         return base.QueueEntry_GetValue_ReturnsUntypedValueAsync();
+    }
+
+    [CulturedFact(["de-DE", "th-TH"])]
+    public void QueueEntry_WithTypedProperties_UsesInvariantCulture()
+    {
+        // Arrange
+        using var queue = new InMemoryQueue<SimpleWorkItem>(o => o.LoggerFactory(Log).MetricsPollingInterval(TimeSpan.Zero));
+        var message = ServiceBusModelFactory.ServiceBusReceivedMessage(messageId: "id", properties: new Dictionary<string, object>
+        {
+            ["amount"] = 1234.5m,
+            ["date"] = new DateTime(2026, 10, 5, 12, 34, 56, DateTimeKind.Utc),
+            ["text"] = "001,50",
+            ["empty"] = String.Empty,
+            ["missing"] = null!,
+            ["CorrelationId"] = "reserved",
+            ["_attempts"] = 2,
+            ["diagnostic-custom"] = "trace"
+        });
+
+        // Act
+        var entry = new AzureServiceBusQueueEntry<SimpleWorkItem>(message, new SimpleWorkItem(), queue);
+
+        // Assert
+        Assert.Equal(4, entry.Properties.Count);
+        Assert.Equal("1234.5", entry.Properties["amount"]);
+        Assert.Equal("10/05/2026 12:34:56", entry.Properties["date"]);
+        Assert.Equal("001,50", entry.Properties["text"]);
+        Assert.Equal(String.Empty, entry.Properties["empty"]);
+        Assert.IsType<decimal>(message.ApplicationProperties["amount"]);
     }
 
     [Fact]

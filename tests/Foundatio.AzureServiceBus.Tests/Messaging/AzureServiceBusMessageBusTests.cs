@@ -358,6 +358,41 @@ public class AzureServiceBusMessageBusTests : MessageBusTestBase
         return base.SubscribeAsync_WithDeserializationFailure_SkipsMessageAsync();
     }
 
+    [CulturedFact(["de-DE"])]
+    public async Task SubscribeAsync_WithTypedProperties_UsesInvariantCultureAsync()
+    {
+        // Arrange
+        using var bus = GetMessageBus();
+        Assert.SkipWhen(bus is null, "Service Bus connection string is required.");
+        var serviceBus = Assert.IsType<AzureServiceBusMessageBus>(bus);
+        string id = Guid.NewGuid().ToString("N");
+        var received = new TaskCompletionSource<IMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            await serviceBus.SubscribeAsync(message =>
+            {
+                if (String.Equals(message.UniqueId, id, StringComparison.Ordinal))
+                    received.TrySetResult(message);
+            }, TestCancellationToken);
+            await using var sender = serviceBus.Client.CreateSender("test-messages");
+            var outbound = new ServiceBusMessage("{}") { MessageId = id, ContentType = typeof(SimpleMessageA).FullName };
+            outbound.ApplicationProperties["amount"] = 1234.5d;
+            outbound.ApplicationProperties["CorrelationId"] = "application-correlation";
+
+            // Act
+            await sender.SendMessageAsync(outbound, TestCancellationToken);
+            var message = await received.Task.WaitAsync(TimeSpan.FromSeconds(10), TestCancellationToken);
+
+            // Assert
+            Assert.Equal("1234.5", message.Properties["amount"]);
+            Assert.Equal("application-correlation", message.Properties["CorrelationId"]);
+        }
+        finally
+        {
+            await CleanupMessageBusAsync(serviceBus);
+        }
+    }
+
     [Fact]
     public override Task SubscribeAsync_WithValidThenPoisonedMessage_DeliversOnlyValidMessageAsync()
     {
