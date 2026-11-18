@@ -59,7 +59,6 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
     private long _dequeuedCount;
     private long _completedCount;
     private long _abandonedCount;
-    private long _sessionWorkerErrorCount;
 
     public AzureServiceBusQueue(AzureServiceBusQueueOptions<T> options) : base(options)
     {
@@ -223,7 +222,6 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
         _dequeuedCount = 0;
         _completedCount = 0;
         _abandonedCount = 0;
-        Interlocked.Exchange(ref _sessionWorkerErrorCount, 0);
         ResetWorkerErrorCount();
     }
 
@@ -432,7 +430,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
             Dequeued = _dequeuedCount,
             Completed = _completedCount,
             Abandoned = _abandonedCount,
-            Errors = Interlocked.Read(ref _sessionWorkerErrorCount) + WorkerErrorCount,
+            Errors = WorkerErrorCount,
             Timeouts = 0
         };
     }
@@ -909,7 +907,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
-                    Interlocked.Increment(ref _sessionWorkerErrorCount);
+                    IncrementWorkerErrorCount();
                     _logger.LogError(ex, "Error on Dequeue: {Message}", ex.Message);
                     var errorBackoff = _options.DequeueInterval > MinDequeueErrorBackoff ? _options.DequeueInterval : MinDequeueErrorBackoff;
                     try
@@ -937,7 +935,7 @@ public class AzureServiceBusQueue<T> : QueueBase<T, AzureServiceBusQueueOptions<
                 }
                 catch (Exception ex)
                 {
-                    Interlocked.Increment(ref _sessionWorkerErrorCount);
+                    IncrementWorkerErrorCount();
                     _logger.LogError(ex, "Worker error: {Message}", ex.Message);
 
                     if (!entry.IsAbandoned && !entry.IsCompleted && !linkedCancellationToken.IsCancellationRequested)
