@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
+using Azure.Messaging.ServiceBus;
 using Foundatio.AzureServiceBus.Queues;
 using Foundatio.Queues;
 using Foundatio.Serializer;
@@ -48,13 +49,18 @@ public class AzureServiceBusQueueTests : QueueTestBase
         if (String.IsNullOrEmpty(connectionString))
             return null;
 
-        return CreateQueue(connectionString, o =>
+        var queue = new AzureServiceBusQueue<SimpleWorkItem>(o =>
         {
-            o.Retries(retries)
+            o.ConnectionString(connectionString)
+             .Name(_queueName)
+             .Retries(retries)
              .WorkItemTimeout(workItemTimeout.GetValueOrDefault(TimeSpan.FromMinutes(5)))
              .DequeueInterval(TimeSpan.FromMilliseconds(500))
+             .ReadQueueTimeout(TimeSpan.FromSeconds(2))
              .TimeProvider(timeProvider)
-             .Serializer(serializer);
+             .MetricsPollingInterval(TimeSpan.Zero)
+             .Serializer(serializer)
+             .LoggerFactory(Log);
 
             if (retryDelay.HasValue)
                 o.RetryDelay(_ => retryDelay.Value);
@@ -70,7 +76,12 @@ public class AzureServiceBusQueueTests : QueueTestBase
                  .RequiresDuplicateDetection(false)
                  .RequiresSession(false);
             }
+
+            return o;
         });
+
+        _logger.LogDebug("Queue Id: {QueueId}", queue.QueueId);
+        return queue;
     }
 
     protected override async Task CleanupQueueAsync(IQueue<SimpleWorkItem> queue)
@@ -88,18 +99,6 @@ public class AzureServiceBusQueueTests : QueueTestBase
     public override Task AbandonAsync_WhenRetriesExceeded_MovesToDeadletterAsync()
     {
         return base.AbandonAsync_WhenRetriesExceeded_MovesToDeadletterAsync();
-    }
-
-    [Fact]
-    public override Task AbandonAsync_WithGroupId_PreservesGroupIdOnRetryAsync()
-    {
-        return base.AbandonAsync_WithGroupId_PreservesGroupIdOnRetryAsync();
-    }
-
-    [Fact]
-    public override Task AbandonAsync_WithGroupIdAndRetryDelay_PreservesGroupIdOnRetryAsync()
-    {
-        return base.AbandonAsync_WithGroupIdAndRetryDelay_PreservesGroupIdOnRetryAsync();
     }
 
     [Fact]
@@ -162,14 +161,20 @@ public class AzureServiceBusQueueTests : QueueTestBase
 
         AzureServiceBusQueue<SimpleWorkItem> CreateDuplicateDetectionQueue(bool requiresDuplicateDetection, bool canCreate)
         {
-            return CreateQueue(connectionString, o => o
-                .Name(queueName)
-                .CanCreateQueue(canCreate)
-                .RequiresDuplicateDetection(requiresDuplicateDetection)
-                .DuplicateDetectionHistoryTimeWindow(TimeSpan.FromMinutes(1))
-                .AutoDeleteOnIdle(TimeSpan.FromMinutes(5))
-                .Retries(2)
-                .RetryDelay(_ => retryDelay));
+            return new AzureServiceBusQueue<SimpleWorkItem>(new AzureServiceBusQueueOptions<SimpleWorkItem>
+            {
+                ConnectionString = connectionString,
+                Name = queueName,
+                CanCreateQueue = canCreate,
+                RequiresDuplicateDetection = requiresDuplicateDetection,
+                DuplicateDetectionHistoryTimeWindow = TimeSpan.FromMinutes(1),
+                AutoDeleteOnIdle = TimeSpan.FromMinutes(5),
+                Retries = 2,
+                RetryDelay = _ => retryDelay,
+                ReadQueueTimeout = TimeSpan.FromSeconds(2),
+                MetricsPollingInterval = TimeSpan.Zero,
+                LoggerFactory = Log
+            });
         }
     }
 
@@ -191,12 +196,6 @@ public class AzureServiceBusQueueTests : QueueTestBase
         return base.CanCompleteQueueEntryOnceAsync();
     }
 
-    [Fact(Skip = "Not using this test because you can set specific delay times for servicebus")]
-    public override Task CanDelayRetryAsync()
-    {
-        return base.CanDelayRetryAsync();
-    }
-
     [Fact(Skip = "Dequeue Time takes forever")]
     public override Task CanDequeueEfficientlyAsync()
     {
@@ -213,6 +212,12 @@ public class AzureServiceBusQueueTests : QueueTestBase
     public override Task CanDequeueWithLockingAsync()
     {
         return base.CanDequeueWithLockingAsync();
+    }
+
+    [Fact(Skip = "Not using this test because you can set specific delay times for servicebus")]
+    public override Task CanDelayRetryAsync()
+    {
+        return base.CanDelayRetryAsync();
     }
 
     [Fact]
@@ -321,6 +326,18 @@ public class AzureServiceBusQueueTests : QueueTestBase
     }
 
     [Fact]
+    public override Task AbandonAsync_WithGroupId_PreservesGroupIdOnRetryAsync()
+    {
+        return base.AbandonAsync_WithGroupId_PreservesGroupIdOnRetryAsync();
+    }
+
+    [Fact]
+    public override Task AbandonAsync_WithGroupIdAndRetryDelay_PreservesGroupIdOnRetryAsync()
+    {
+        return base.AbandonAsync_WithGroupIdAndRetryDelay_PreservesGroupIdOnRetryAsync();
+    }
+
+    [Fact]
     public override Task DequeueAsync_WithDispose_AutoAbandonsEntryAsync()
     {
         return base.DequeueAsync_WithDispose_AutoAbandonsEntryAsync();
@@ -403,39 +420,9 @@ public class AzureServiceBusQueueTests : QueueTestBase
     }
 
     [Fact]
-    public override Task EnqueueAsync_WhenResolverReturnsEmpty_EnqueuesWithoutGroupAsync()
-    {
-        return base.EnqueueAsync_WhenResolverReturnsEmpty_EnqueuesWithoutGroupAsync();
-    }
-
-    [Fact]
-    public override Task EnqueueAsync_WhenResolverReturnsNull_EnqueuesWithoutGroupAsync()
-    {
-        return base.EnqueueAsync_WhenResolverReturnsNull_EnqueuesWithoutGroupAsync();
-    }
-
-    [Fact]
-    public override Task EnqueueAsync_WithActivity_AppliesCorrelationBeforeEnqueuingHandlersAsync()
-    {
-        return base.EnqueueAsync_WithActivity_AppliesCorrelationBeforeEnqueuingHandlersAsync();
-    }
-
-    [Fact]
     public override Task EnqueueAsync_WithEmptyGroupId_EnqueuesWithoutGroupAsync()
     {
         return base.EnqueueAsync_WithEmptyGroupId_EnqueuesWithoutGroupAsync();
-    }
-
-    [Fact]
-    public override Task EnqueueAsync_WithEmptyGroupIdAndResolver_UsesPayloadValueAsync()
-    {
-        return base.EnqueueAsync_WithEmptyGroupIdAndResolver_UsesPayloadValueAsync();
-    }
-
-    [Fact]
-    public override Task EnqueueAsync_WithExplicitGroupId_OverridesResolverAsync()
-    {
-        return base.EnqueueAsync_WithExplicitGroupId_OverridesResolverAsync();
     }
 
     [Fact]
@@ -502,18 +489,6 @@ public class AzureServiceBusQueueTests : QueueTestBase
     }
 
     [Fact]
-    public override Task EnqueueAsync_WithGroupIdResolver_DoesNotChangeCallerOptionsAsync()
-    {
-        return base.EnqueueAsync_WithGroupIdResolver_DoesNotChangeCallerOptionsAsync();
-    }
-
-    [Fact]
-    public override Task EnqueueAsync_WithGroupIdResolver_UsesPayloadValueAsync()
-    {
-        return base.EnqueueAsync_WithGroupIdResolver_UsesPayloadValueAsync();
-    }
-
-    [Fact]
     public async Task EnqueueAsync_WithoutUniqueId_ReturnsDequeuedEntryIdAsync()
     {
         // Arrange
@@ -546,18 +521,6 @@ public class AzureServiceBusQueueTests : QueueTestBase
         {
             await CleanupQueueAsync(queue);
         }
-    }
-
-    [Fact]
-    public override Task EnqueueAsync_WithReusedOptions_DoesNotChangeCallerOptionsAsync()
-    {
-        return base.EnqueueAsync_WithReusedOptions_DoesNotChangeCallerOptionsAsync();
-    }
-
-    [Fact]
-    public override Task EnqueueAsync_WithReusedOptionsAndGroupIdResolver_EnqueuesEachMessageAsync()
-    {
-        return base.EnqueueAsync_WithReusedOptionsAndGroupIdResolver_EnqueuesEachMessageAsync();
     }
 
     [Fact]
@@ -594,6 +557,60 @@ public class AzureServiceBusQueueTests : QueueTestBase
         {
             await CleanupQueueAsync(queue);
         }
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithReusedOptions_DoesNotChangeCallerOptionsAsync()
+    {
+        return base.EnqueueAsync_WithReusedOptions_DoesNotChangeCallerOptionsAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WhenResolverReturnsEmpty_EnqueuesWithoutGroupAsync()
+    {
+        return base.EnqueueAsync_WhenResolverReturnsEmpty_EnqueuesWithoutGroupAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WhenResolverReturnsNull_EnqueuesWithoutGroupAsync()
+    {
+        return base.EnqueueAsync_WhenResolverReturnsNull_EnqueuesWithoutGroupAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithActivity_AppliesCorrelationBeforeEnqueuingHandlersAsync()
+    {
+        return base.EnqueueAsync_WithActivity_AppliesCorrelationBeforeEnqueuingHandlersAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithEmptyGroupIdAndResolver_UsesPayloadValueAsync()
+    {
+        return base.EnqueueAsync_WithEmptyGroupIdAndResolver_UsesPayloadValueAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithExplicitGroupId_OverridesResolverAsync()
+    {
+        return base.EnqueueAsync_WithExplicitGroupId_OverridesResolverAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithGroupIdResolver_DoesNotChangeCallerOptionsAsync()
+    {
+        return base.EnqueueAsync_WithGroupIdResolver_DoesNotChangeCallerOptionsAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithGroupIdResolver_UsesPayloadValueAsync()
+    {
+        return base.EnqueueAsync_WithGroupIdResolver_UsesPayloadValueAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithReusedOptionsAndGroupIdResolver_EnqueuesEachMessageAsync()
+    {
+        return base.EnqueueAsync_WithReusedOptionsAndGroupIdResolver_EnqueuesEachMessageAsync();
     }
 
     [Fact]
@@ -638,6 +655,26 @@ public class AzureServiceBusQueueTests : QueueTestBase
         return base.QueueEntry_GetValue_ReturnsUntypedValueAsync();
     }
 
+    [Theory]
+    [InlineData("x-opt-foundatio-id")]
+    [InlineData("x-opt-foundatio-original-message-id")]
+    public void QueueEntry_WithRetryAnnotation_RestoresEntryId(string annotation)
+    {
+        // Arrange
+        using var queue = GetQueue();
+        Assert.SkipWhen(queue is null, "Service Bus connection string is required.");
+        Assert.NotNull(queue);
+        var message = ServiceBusModelFactory.ServiceBusReceivedMessage(messageId: "scheduled-copy");
+        message.GetRawAmqpMessage().MessageAnnotations[annotation] = "entry-id";
+
+        // Act
+        var entry = new AzureServiceBusQueueEntry<SimpleWorkItem>(message, new SimpleWorkItem(), queue);
+
+        // Assert
+        Assert.Equal("entry-id", entry.Id);
+        Assert.Equal("scheduled-copy", entry.UnderlyingMessage.MessageId);
+    }
+
     [Fact]
     public override Task VerifyDelayedRetryAttemptsAsync()
     {
@@ -662,32 +699,16 @@ public class AzureServiceBusQueueTests : QueueTestBase
         return base.WillWaitForItemAsync();
     }
 
-    [Fact]
-    public override Task WorkItemsWillGetMovedToDeadletterAsync()
-    {
-        return base.WorkItemsWillGetMovedToDeadletterAsync();
-    }
-
     [Fact(Skip = "Dequeue Time takes forever")]
     public override Task WorkItemsWillTimeoutAsync()
     {
         return base.WorkItemsWillTimeoutAsync();
     }
 
-    private AzureServiceBusQueue<SimpleWorkItem> CreateQueue(string connectionString, Action<AzureServiceBusQueueOptionsBuilder<SimpleWorkItem>> configure)
+    [Fact]
+    public override Task WorkItemsWillGetMovedToDeadletterAsync()
     {
-        var queue = new AzureServiceBusQueue<SimpleWorkItem>(o =>
-        {
-            o.ConnectionString(connectionString)
-                .Name(_queueName)
-                .ReadQueueTimeout(TimeSpan.FromSeconds(2))
-                .MetricsPollingInterval(TimeSpan.Zero)
-                .LoggerFactory(Log);
-            configure(o);
-            return o;
-        });
-
-        _logger.LogDebug("Queue Id: {QueueId}", queue.QueueId);
-        return queue;
+        return base.WorkItemsWillGetMovedToDeadletterAsync();
     }
+
 }
