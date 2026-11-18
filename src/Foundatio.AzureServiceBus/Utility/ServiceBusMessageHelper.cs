@@ -7,14 +7,7 @@ namespace Foundatio.AzureServiceBus.Utility;
 /// </summary>
 internal static class ServiceBusMessageHelper
 {
-    /// <summary>
-    /// Application property that carries the attempt count across scheduled retries.
-    /// </summary>
     public const string AttemptsPropertyName = "_attempts";
-
-    /// <summary>
-    /// Application property that carries the original MessageId when a scheduled retry is sent under a new id.
-    /// </summary>
     public const string OriginalMessageIdPropertyName = "_originalMessageId";
 
     /// <summary>

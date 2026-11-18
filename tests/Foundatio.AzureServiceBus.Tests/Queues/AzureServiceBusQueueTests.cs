@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using Foundatio.AzureServiceBus.Queues;
 using Foundatio.Queues;
@@ -41,7 +42,7 @@ public class AzureServiceBusQueueTests : QueueTestBase
             _assertStats = false;
     }
 
-    protected override IQueue<SimpleWorkItem>? GetQueue(int retries = 1, TimeSpan? workItemTimeout = null, TimeSpan? retryDelay = null, int[]? retryMultipliers = null, int deadLetterMaxItems = 100, bool runQueueMaintenance = true, TimeProvider? timeProvider = null, ISerializer? serializer = null)
+    protected override IQueue<SimpleWorkItem>? GetQueue(int retries = 1, TimeSpan? workItemTimeout = null, TimeSpan? retryDelay = null, int[]? retryMultipliers = null, int deadLetterMaxItems = 100, bool runQueueMaintenance = true, TimeProvider? timeProvider = null, ISerializer? serializer = null, Func<SimpleWorkItem, string?>? groupIdResolver = null)
     {
         string? connectionString = Configuration.GetConnectionString("AzureServiceBusConnectionString");
         if (String.IsNullOrEmpty(connectionString))
@@ -62,6 +63,9 @@ public class AzureServiceBusQueueTests : QueueTestBase
 
             if (retryDelay.HasValue)
                 o.RetryDelay(_ => retryDelay.Value);
+
+            if (groupIdResolver is not null)
+                o.GroupId(groupIdResolver);
 
             if (!_isEmulator)
             {
@@ -370,6 +374,7 @@ public class AzureServiceBusQueueTests : QueueTestBase
             await CleanupQueueAsync(queue);
         }
     }
+
     [Fact]
     public override Task EnqueueAsync_WithGroupId_RoundTripsGroupIdAsync()
     {
@@ -445,6 +450,54 @@ public class AzureServiceBusQueueTests : QueueTestBase
     public override Task EnqueueAsync_WithReusedOptions_DoesNotChangeCallerOptionsAsync()
     {
         return base.EnqueueAsync_WithReusedOptions_DoesNotChangeCallerOptionsAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WhenResolverReturnsEmpty_EnqueuesWithoutGroupAsync()
+    {
+        return base.EnqueueAsync_WhenResolverReturnsEmpty_EnqueuesWithoutGroupAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WhenResolverReturnsNull_EnqueuesWithoutGroupAsync()
+    {
+        return base.EnqueueAsync_WhenResolverReturnsNull_EnqueuesWithoutGroupAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithActivity_AppliesCorrelationBeforeEnqueuingHandlersAsync()
+    {
+        return base.EnqueueAsync_WithActivity_AppliesCorrelationBeforeEnqueuingHandlersAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithEmptyGroupIdAndResolver_UsesPayloadValueAsync()
+    {
+        return base.EnqueueAsync_WithEmptyGroupIdAndResolver_UsesPayloadValueAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithExplicitGroupId_OverridesResolverAsync()
+    {
+        return base.EnqueueAsync_WithExplicitGroupId_OverridesResolverAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithGroupIdResolver_DoesNotChangeCallerOptionsAsync()
+    {
+        return base.EnqueueAsync_WithGroupIdResolver_DoesNotChangeCallerOptionsAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithGroupIdResolver_UsesPayloadValueAsync()
+    {
+        return base.EnqueueAsync_WithGroupIdResolver_UsesPayloadValueAsync();
+    }
+
+    [Fact]
+    public override Task EnqueueAsync_WithReusedOptionsAndGroupIdResolver_EnqueuesEachMessageAsync()
+    {
+        return base.EnqueueAsync_WithReusedOptionsAndGroupIdResolver_EnqueuesEachMessageAsync();
     }
 
     [Fact]
@@ -528,32 +581,27 @@ public class AzureServiceBusQueueTests : QueueTestBase
     [Fact]
     public async Task EnqueueAsync_WithoutUniqueId_ReturnsDequeuedEntryIdAsync()
     {
-        // Arrange
         using var queue = GetQueue();
-        if (queue is null)
-            return;
+        Assert.SkipWhen(queue is null, "Service Bus connection string is required.");
+        Assert.NotNull(queue);
 
         try
         {
             await queue.DeleteQueueAsync();
-            await AssertEmptyQueueAsync(queue);
-
-            IQueueEntry<SimpleWorkItem>? enqueued = null;
+            string? enqueuedId = null;
             queue.Enqueued.AddHandler((_, args) =>
             {
-                enqueued = args.Entry;
+                enqueuedId = args.Entry.Id;
                 return Task.CompletedTask;
             });
 
-            // Act
             string? id = await queue.EnqueueAsync(new SimpleWorkItem { Data = "id" });
             var entry = await queue.DequeueAsync(TimeSpan.FromSeconds(5));
 
-            // Assert
             Assert.False(String.IsNullOrEmpty(id));
             Assert.NotNull(entry);
+            Assert.Equal(id, enqueuedId);
             Assert.Equal(id, entry.Id);
-            Assert.Equal(id, enqueued?.Id);
             await entry.CompleteAsync();
         }
         finally
@@ -565,70 +613,67 @@ public class AzureServiceBusQueueTests : QueueTestBase
     [Fact]
     public async Task AbandonAsync_WithRetryDelayAndDuplicateDetection_RedeliversRetryAsync()
     {
-        // Arrange
-        using var queue = GetDuplicateDetectionQueue();
-        if (queue is null)
-            return;
+        string? connectionString = Configuration.GetConnectionString("AzureServiceBusConnectionString");
+        Assert.SkipWhen(String.IsNullOrEmpty(connectionString), "Service Bus connection string is required.");
+        Assert.NotNull(connectionString);
+
+        string queueName = _isEmulator ? "foundatio-test-queue-duplicate-detection" : $"foundatio-dd-{Guid.NewGuid():N}";
+        var retryDelay = TimeSpan.FromSeconds(1);
+        await using var sender = CreateQueue(requiresDuplicateDetection: true, canCreate: true);
+        await using var receiver = CreateQueue(requiresDuplicateDetection: _isEmulator, canCreate: false);
 
         try
         {
-            await queue.DeleteQueueAsync();
-            await AssertEmptyQueueAsync(queue);
-
-            string? id = await queue.EnqueueAsync(new SimpleWorkItem { Data = "retry" }, new QueueEntryOptions
+            await sender.DeleteQueueAsync();
+            string? id = await sender.EnqueueAsync(new SimpleWorkItem { Data = "retry" }, new QueueEntryOptions
             {
+                UniqueId = Guid.NewGuid().ToString("N"),
+                GroupId = "group",
                 CorrelationId = "correlation",
                 Properties = { ["tenant"] = "a" }
             });
-            Assert.NotNull(id);
 
-            var entry = await queue.DequeueAsync(TimeSpan.FromSeconds(5));
-            Assert.NotNull(entry);
+            var original = Assert.IsType<AzureServiceBusQueueEntry<SimpleWorkItem>>(
+                await receiver.DequeueAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(id, original.Id);
 
-            // Act
-            await entry.AbandonAsync();
-            var retry = await queue.DequeueAsync(TimeSpan.FromSeconds(15));
+            var started = Stopwatch.GetTimestamp();
+            await original.AbandonAsync();
+            var retry = Assert.IsType<AzureServiceBusQueueEntry<SimpleWorkItem>>(
+                await receiver.DequeueAsync(TimeSpan.FromSeconds(15)));
 
-            // Assert
-            Assert.NotNull(retry);
-            Assert.Equal("retry", retry.Value.Data);
+            Assert.True(Stopwatch.GetElapsedTime(started) >= retryDelay - TimeSpan.FromMilliseconds(200));
+            Assert.NotEqual(original.UnderlyingMessage.MessageId, retry.UnderlyingMessage.MessageId);
             Assert.Equal(id, retry.Id);
             Assert.Equal(2, retry.Attempts);
+            Assert.Equal("retry", retry.Value.Data);
+            Assert.Equal("group", retry.GroupId);
             Assert.Equal("correlation", retry.CorrelationId);
-            Assert.Equal("a", Assert.Single(retry.Properties).Value);
-            Assert.NotEqual(id, Assert.IsType<AzureServiceBusQueueEntry<SimpleWorkItem>>(retry).UnderlyingMessage.MessageId);
+            Assert.Equal("a", retry.Properties["tenant"]);
+            Assert.DoesNotContain("_originalMessageId", retry.Properties.Keys);
 
             await retry.CompleteAsync();
         }
         finally
         {
-            await CleanupQueueAsync(queue);
+            await sender.DeleteQueueAsync();
         }
-    }
 
-    private AzureServiceBusQueue<SimpleWorkItem>? GetDuplicateDetectionQueue()
-    {
-        string? connectionString = Configuration.GetConnectionString("AzureServiceBusConnectionString");
-        if (String.IsNullOrEmpty(connectionString))
-            return null;
-
-        return new AzureServiceBusQueue<SimpleWorkItem>(o =>
+        AzureServiceBusQueue<SimpleWorkItem> CreateQueue(bool requiresDuplicateDetection, bool canCreate)
         {
-            o.ConnectionString(connectionString)
-             .Name(_isEmulator ? "foundatio-test-queue-duplicate-detection" : "foundatio-dd-" + Guid.NewGuid().ToString("N")[..10])
-             .Retries(1)
-             .RetryDelay(_ => TimeSpan.FromSeconds(1))
-             .RequiresDuplicateDetection(true)
-             .DuplicateDetectionHistoryTimeWindow(TimeSpan.FromMinutes(1))
-             .ReadQueueTimeout(TimeSpan.FromSeconds(2))
-             .MetricsPollingInterval(TimeSpan.Zero)
-             .LoggerFactory(Log);
-
-            if (!_isEmulator)
-                o.AutoDeleteOnIdle(TimeSpan.FromMinutes(5));
-
-            return o;
-        });
+            return new AzureServiceBusQueue<SimpleWorkItem>(o => o
+                .ConnectionString(connectionString)
+                .Name(queueName)
+                .CanCreateQueue(canCreate)
+                .RequiresDuplicateDetection(requiresDuplicateDetection)
+                .DuplicateDetectionHistoryTimeWindow(TimeSpan.FromMinutes(1))
+                .AutoDeleteOnIdle(TimeSpan.FromMinutes(5))
+                .Retries(1)
+                .RetryDelay(_ => retryDelay)
+                .ReadQueueTimeout(TimeSpan.FromSeconds(2))
+                .MetricsPollingInterval(TimeSpan.Zero)
+                .LoggerFactory(Log));
+        }
     }
 
 }

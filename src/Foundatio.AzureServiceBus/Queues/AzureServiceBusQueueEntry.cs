@@ -9,6 +9,11 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
 {
     public ServiceBusReceivedMessage UnderlyingMessage { get; }
 
+    /// <summary>
+    /// The session receiver that holds this message's session on session-enabled queues; otherwise null.
+    /// </summary>
+    internal ServiceBusSessionReceiver? SessionReceiver { get; init; }
+
     public AzureServiceBusQueueEntry(ServiceBusReceivedMessage message, T value, IQueue<T> queue)
         : base(GetEntryId(message), message.CorrelationId, value, queue, message.EnqueuedTime.UtcDateTime, GetAttemptCount(message))
     {
@@ -27,31 +32,27 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
 
     private static bool IsReservedProperty(string propertyName)
     {
-        return ServiceBusMessageHelper.IsSdkDiagnosticProperty(propertyName)
-            || propertyName is "CorrelationId" or ServiceBusMessageHelper.AttemptsPropertyName or ServiceBusMessageHelper.OriginalMessageIdPropertyName;
+        return ServiceBusMessageHelper.IsSdkDiagnosticProperty(propertyName) ||
+            propertyName is "CorrelationId" or ServiceBusMessageHelper.AttemptsPropertyName or ServiceBusMessageHelper.OriginalMessageIdPropertyName;
     }
 
-    /// <summary>
-    /// Gets the entry id. Scheduled retries on duplicate-detection queues are sent under a new MessageId and carry the
-    /// original id in an application property so the entry id stays stable across attempts.
-    /// </summary>
     private static string GetEntryId(ServiceBusReceivedMessage message)
     {
-        if (message.ApplicationProperties.TryGetValue(ServiceBusMessageHelper.OriginalMessageIdPropertyName, out object? originalId) && originalId is string id && !String.IsNullOrEmpty(id))
-            return id;
+        if (message.ApplicationProperties.TryGetValue(ServiceBusMessageHelper.OriginalMessageIdPropertyName, out object? value) &&
+            value is string { Length: > 0 } originalId)
+            return originalId;
 
         return message.MessageId;
     }
 
     /// <summary>
-    /// Gets the attempt count from the message. Uses the _attempts application property if available (for scheduled retries),
-    /// otherwise falls back to the DeliveryCount.
+    /// Gets the attempt count from the message. A scheduled retry copy stores the attempts of the original in the
+    /// <c>_attempts</c> application property; deliveries of the copy itself (lock expiry or abandon) add its DeliveryCount.
     /// </summary>
     private static int GetAttemptCount(ServiceBusReceivedMessage message)
     {
-        // Check if we have a stored attempt count from a scheduled retry
         if (message.ApplicationProperties.TryGetValue(ServiceBusMessageHelper.AttemptsPropertyName, out object? attemptsValue) && attemptsValue is int storedAttempts)
-            return storedAttempts + 1; // Add 1 because this is a new delivery of that retry
+            return storedAttempts + message.DeliveryCount;
 
         // Fall back to delivery count for normal abandon/retry
         return message.DeliveryCount;
