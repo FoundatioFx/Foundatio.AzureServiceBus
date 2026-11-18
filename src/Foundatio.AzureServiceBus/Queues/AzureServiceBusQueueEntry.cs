@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using Azure.Messaging.ServiceBus;
 using Foundatio.AzureServiceBus.Utility;
 
@@ -7,6 +6,9 @@ namespace Foundatio.Queues;
 
 public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
 {
+    private const string AttemptsPropertyName = "_attempts";
+    private const string OriginalMessageIdAnnotation = "x-opt-foundatio-original-message-id";
+
     public ServiceBusReceivedMessage UnderlyingMessage { get; }
 
     /// <summary>
@@ -17,28 +19,44 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
     public AzureServiceBusQueueEntry(ServiceBusReceivedMessage message, T value, IQueue<T> queue)
         : base(GetEntryId(message), message.CorrelationId, value, queue, message.EnqueuedTime.UtcDateTime, GetAttemptCount(message))
     {
-        if (message.ApplicationProperties is not null)
+        foreach (var property in message.ApplicationProperties)
         {
-            foreach (var property in message.ApplicationProperties.Where(a => !IsReservedProperty(a.Key)))
-            {
-                if (property.Value?.ToString() is { } propValue)
-                    Properties.Add(property.Key, propValue);
-            }
+            if (String.Equals(property.Key, "CorrelationId", StringComparison.Ordinal) ||
+                String.Equals(property.Key, AttemptsPropertyName, StringComparison.Ordinal) ||
+                ServiceBusMessageHelper.IsSdkDiagnosticProperty(property.Key))
+                continue;
+
+            if (property.Value?.ToString() is { } valueString)
+                Properties.Add(property.Key, valueString);
         }
 
         UnderlyingMessage = message;
         GroupId = String.IsNullOrEmpty(message.SessionId) ? null : message.SessionId;
     }
 
-    private static bool IsReservedProperty(string propertyName)
+    internal ServiceBusMessage CreateRetryMessage(DateTimeOffset scheduledEnqueueTime, bool requiresDuplicateDetection)
     {
-        return ServiceBusMessageHelper.IsSdkDiagnosticProperty(propertyName) ||
-            propertyName is "CorrelationId" or ServiceBusMessageHelper.AttemptsPropertyName or ServiceBusMessageHelper.OriginalMessageIdPropertyName;
+        var retry = new ServiceBusMessage(UnderlyingMessage) { ScheduledEnqueueTime = scheduledEnqueueTime };
+        foreach (string key in UnderlyingMessage.ApplicationProperties.Keys)
+        {
+            if (ServiceBusMessageHelper.IsSdkDiagnosticProperty(key))
+                retry.ApplicationProperties.Remove(key);
+        }
+
+        retry.ApplicationProperties[AttemptsPropertyName] = Attempts;
+        if (requiresDuplicateDetection)
+        {
+            // Keep the logical ID separate from caller-owned application properties when the broker ID changes.
+            retry.GetRawAmqpMessage().MessageAnnotations[OriginalMessageIdAnnotation] = Id;
+            retry.MessageId = Guid.NewGuid().ToString("N");
+        }
+
+        return retry;
     }
 
     private static string GetEntryId(ServiceBusReceivedMessage message)
     {
-        if (message.ApplicationProperties.TryGetValue(ServiceBusMessageHelper.OriginalMessageIdPropertyName, out object? value) &&
+        if (message.GetRawAmqpMessage().MessageAnnotations.TryGetValue(OriginalMessageIdAnnotation, out object? value) &&
             value is string { Length: > 0 } originalId)
             return originalId;
 
@@ -51,7 +69,7 @@ public class AzureServiceBusQueueEntry<T> : QueueEntry<T> where T : class
     /// </summary>
     private static int GetAttemptCount(ServiceBusReceivedMessage message)
     {
-        if (message.ApplicationProperties.TryGetValue(ServiceBusMessageHelper.AttemptsPropertyName, out object? attemptsValue) && attemptsValue is int storedAttempts)
+        if (message.ApplicationProperties.TryGetValue(AttemptsPropertyName, out object? attemptsValue) && attemptsValue is int storedAttempts)
             return storedAttempts + message.DeliveryCount;
 
         // Fall back to delivery count for normal abandon/retry
